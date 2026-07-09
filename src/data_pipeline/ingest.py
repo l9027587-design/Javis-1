@@ -12,6 +12,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.config import settings
 from src.data_pipeline.api_client import TennisAPIClient
 from src.data_pipeline.odds_client import OddsAPIClient
 from src.db.models import Match, Odds, Player
@@ -87,8 +88,15 @@ def sync_schedule(session: Session, client: TennisAPIClient, date: str) -> int:
 
 
 def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
-    """Fetch current odds and record a snapshot per match found by fuzzy name match."""
-    events = odds_client.get_odds()
+    """Fetch current odds and record a snapshot per match found by fuzzy name match.
+
+    Prefers Tipico's feed (settings.odds_bookmakers, default "tipico_de") since that's
+    the requested data source; falls back to the broader eu/uk/us region odds for
+    matches Tipico doesn't currently list.
+    """
+    events = odds_client.get_odds_for_bookmakers(settings.odds_bookmakers) if settings.odds_bookmakers else []
+    if not events:
+        events = odds_client.get_odds()
     count = 0
     for event in events:
         home_name, away_name = event.get("home_team"), event.get("away_team")
