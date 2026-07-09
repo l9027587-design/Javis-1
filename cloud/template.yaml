@@ -1,0 +1,64 @@
+# AWS SAM template: three scheduled, container-image Lambdas sharing one image,
+# reading secrets from Secrets Manager. Deploy with:
+#   sam build && sam deploy --guided
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Tennis data pipeline, prediction model, and chat assistant backend.
+
+Parameters:
+  SecretsArn:
+    Type: String
+    Description: ARN of a Secrets Manager secret containing TENNIS_API_KEY, ODDS_API_KEY, DATABASE_URL, OPENAI_API_KEY
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 1024
+    PackageType: Image
+
+Resources:
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tennis-pipeline:latest"
+      ImageConfig:
+        Command: ["lambda_ingest_handler.handler"]
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref SecretsArn
+      Events:
+        Schedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(30 minutes)"
+
+  PredictFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tennis-pipeline:latest"
+      ImageConfig:
+        Command: ["lambda_predict_handler.handler"]
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref SecretsArn
+      Events:
+        Schedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(1 day)"
+
+  TrainFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/tennis-pipeline:latest"
+      ImageConfig:
+        Command: ["lambda_train_handler.handler"]
+      Timeout: 600
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref SecretsArn
+      Events:
+        Schedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(7 days)"
