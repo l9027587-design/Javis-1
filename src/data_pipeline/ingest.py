@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from src.config import settings
 from src.data_pipeline.api_client import TennisAPIClient
@@ -143,10 +143,15 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
         if not best or home_name not in best or away_name not in best:
             continue
 
+        home_last, away_last = home_name.split()[-1], away_name.split()[-1]
+        Player1, Player2 = aliased(Player), aliased(Player)
         match = session.scalar(
             select(Match)
-            .join(Player, Match.player1_id == Player.id)
-            .where(Player.name.ilike(f"%{home_name.split()[-1]}%"))
+            .join(Player1, Match.player1_id == Player1.id)
+            .join(Player2, Match.player2_id == Player2.id)
+            .where(
+                Player1.name.ilike(f"%{home_last}%"), Player2.name.ilike(f"%{away_last}%")
+            )
         )
         if match is None:
             continue  # no matching row ingested from the stats API yet
@@ -170,7 +175,6 @@ def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
     """Full ingestion cycle: rankings, next `days_ahead` days of schedule, and odds."""
     init_db()
     client = TennisAPIClient()
-    odds_client = OddsAPIClient()
 
     results = {"players": 0, "matches": 0, "odds": 0}
     with get_session() as session:
@@ -180,7 +184,7 @@ def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
             for offset in range(days_ahead):
                 date_str = (today + dt.timedelta(days=offset)).isoformat()
                 results["matches"] += sync_schedule(session, client, date_str, tour=tour)
-        results["odds"] = sync_odds(session, odds_client)
+            results["odds"] += sync_odds(session, OddsAPIClient(tour_prefix=f"tennis_{tour}"))
     return results
 
 

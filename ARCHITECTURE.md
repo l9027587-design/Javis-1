@@ -54,12 +54,16 @@ of the LLM hallucinating stats, which matters a lot for anything bet-related.
   (Sportradar Tennis API or a RapidAPI tennis provider). Endpoint paths are kept in a
   config dict because they differ by provider/plan — point it at whichever API you
   subscribe to.
-- `odds_client.py` — client for [The Odds API](https://the-odds-api.com) (`tennis_atp` /
-  `tennis_wta` sports keys), a documented, inexpensive odds source with a stable REST
-  contract. Good complement to Sportradar/RapidAPI, which often don't include live
-  bookmaker odds on cheaper tiers. `get_odds_for_bookmakers()` filters to specific
-  bookmaker keys — by default `tipico_de`, so the odds recorded are Tipico's — via The
-  Odds API's own `bookmakers` param, rather than scraping tipico.de directly.
+- `odds_client.py` — client for [The Odds API](https://the-odds-api.com), a documented,
+  inexpensive odds source with a stable REST contract. The Odds API keys tennis
+  per-tournament rather than one blanket `tennis_atp`/`tennis_wta` sport (e.g.
+  `tennis_atp_wimbledon`, `tennis_atp_french_open`), and a key only exists while that
+  tournament is in season, so `OddsAPIClient` first lists currently in-season sports via
+  `/v4/sports` and queries every tournament key matching the requested tour prefix
+  (`tennis_atp` or `tennis_wta`). Good complement to Sportradar/RapidAPI, which often
+  don't include live bookmaker odds on cheaper tiers. `get_odds_for_bookmakers()` filters
+  to specific bookmaker keys — by default `tipico_de`, so the odds recorded are Tipico's
+  — via The Odds API's own `bookmakers` param, rather than scraping tipico.de directly.
 - `ingest.py` — orchestrates one ingestion cycle: pull rankings → upsert `players`;
   pull upcoming schedule → upsert `matches`; pull Tipico odds (falling back to the
   broader eu/uk/us region odds if Tipico hasn't posted a line yet) for those matches →
