@@ -1,0 +1,58 @@
+name: Pipeline step
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "Which step to run"
+        required: true
+        type: choice
+        default: init-db
+        options:
+          - init-db
+          - ingest
+          - train-and-predict
+          - predict-only
+
+jobs:
+  run-step:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TENNIS_API_PROVIDER: ${{ vars.TENNIS_API_PROVIDER }}
+      TENNIS_API_KEY: ${{ secrets.TENNIS_API_KEY }}
+      TENNIS_API_HOST: ${{ vars.TENNIS_API_HOST }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      ODDS_BOOKMAKERS: ${{ vars.ODDS_BOOKMAKERS }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ github.run_id }}
+          restore-keys: models-
+
+      - name: init-db
+        if: inputs.step == 'init-db'
+        run: python -m scripts.init_db
+
+      - name: ingest
+        if: inputs.step == 'ingest'
+        run: python -m src.data_pipeline.ingest
+
+      - name: train
+        if: inputs.step == 'train-and-predict'
+        run: python -m src.ml.train
+
+      - name: predict
+        if: inputs.step == 'train-and-predict' || inputs.step == 'predict-only'
+        run: python -m src.ml.predict
