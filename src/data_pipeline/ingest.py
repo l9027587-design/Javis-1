@@ -10,6 +10,7 @@ import datetime as dt
 import logging
 from typing import Any
 
+import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session, aliased
 
@@ -74,7 +75,15 @@ def sync_rankings(session: Session, client: TennisAPIClient, tour: str = "atp") 
 
 def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: str = "atp") -> int:
     """Fetch matches scheduled for `date` (YYYY-MM-DD) on one tour and upsert them."""
-    data = client.get_schedule(date, tour=tour)
+    try:
+        data = client.get_schedule(date, tour=tour)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 403:
+            # Some plans only expose fixtures within a limited days-ahead window; a
+            # date beyond that shouldn't abort the whole ingestion run.
+            logger.warning("Schedule for tour=%s date=%s forbidden (plan limit?), skipping", tour, date)
+            return 0
+        raise
     raw_matches = _extract_list(data, "fixtures", "sport_events", "matches", "data", "results")
     if not raw_matches:
         logger.warning(
