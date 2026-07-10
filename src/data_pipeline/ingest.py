@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,57 +34,95 @@ def _upsert_player(session: Session, external_id: str, name: str, rank: int | No
     return player
 
 
-def sync_rankings(session: Session, client: TennisAPIClient) -> int:
-    """Fetch current rankings and upsert players. Returns count synced."""
-    data = client.get_rankings()
-    entries = data.get("rankings", data) if isinstance(data, dict) else data
+def _extract_list(data: Any, *keys: str) -> list:
+    """Unwrap a list from a JSON envelope, trying known/likely container keys."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in keys:
+            if isinstance(data.get(key), list):
+                return data[key]
+    return []
+
+
+def sync_rankings(session: Session, client: TennisAPIClient, tour: str = "atp") -> int:
+    """Fetch current rankings for one tour and upsert players. Returns count synced."""
+    data = client.get_rankings(tour=tour)
+    entries = _extract_list(data, "rankings", "data", "results", "players")
+    if not entries:
+        logger.warning(
+            "No ranking entries parsed for tour=%s; raw response keys/sample: %s",
+            tour,
+            list(data.keys()) if isinstance(data, dict) else str(data)[:300],
+        )
     count = 0
     for entry in entries:
-        competitor = entry.get("competitor", entry)
-        external_id = str(competitor.get("id") or competitor.get("player_id"))
-        name = competitor.get("name") or competitor.get("full_name", "Unknown")
-        rank = entry.get("rank")
+        competitor = entry.get("player", entry.get("competitor", entry))
+        external_id = str(
+            competitor.get("id") or competitor.get("playerId") or competitor.get("player_id") or ""
+        )
+        name = competitor.get("name") or competitor.get("fullName") or competitor.get("full_name", "Unknown")
+        rank = entry.get("rank") or entry.get("position")
         points = entry.get("points")
         if not external_id or external_id == "None":
             continue
         _upsert_player(session, external_id, name, rank, points)
         count += 1
-    logger.info("Synced %d player rankings", count)
+    logger.info("Synced %d player rankings for tour=%s", count, tour)
     return count
 
 
-def sync_schedule(session: Session, client: TennisAPIClient, date: str) -> int:
-    """Fetch matches scheduled for `date` (YYYY-MM-DD) and upsert them."""
-    data = client.get_schedule(date)
-    raw_matches = data.get("sport_events", data.get("matches", data)) if isinstance(data, dict) else data
+def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: str = "atp") -> int:
+    """Fetch matches scheduled for `date` (YYYY-MM-DD) on one tour and upsert them."""
+    data = client.get_schedule(date, tour=tour)
+    raw_matches = _extract_list(data, "fixtures", "sport_events", "matches", "data", "results")
+    if not raw_matches:
+        logger.warning(
+            "No fixtures parsed for tour=%s date=%s; raw response keys/sample: %s",
+            tour,
+            date,
+            list(data.keys()) if isinstance(data, dict) else str(data)[:300],
+        )
     count = 0
     for raw in raw_matches:
-        external_id = str(raw.get("id") or raw.get("match_id"))
+        external_id = str(raw.get("id") or raw.get("fixtureId") or raw.get("match_id") or "")
         if not external_id or external_id == "None":
             continue
 
-        home = raw.get("competitors", [{}, {}])[0] if raw.get("competitors") else raw.get("player1", {})
-        away = raw.get("competitors", [{}, {}])[1] if raw.get("competitors") else raw.get("player2", {})
+        competitors = raw.get("competitors") or raw.get("players")
+        home = competitors[0] if competitors else raw.get("player1") or raw.get("home") or {}
+        away = competitors[1] if competitors else raw.get("player2") or raw.get("away") or {}
 
-        p1 = _upsert_player(session, str(home.get("id", f"{external_id}-p1")), home.get("name", "TBD"), None, None)
-        p2 = _upsert_player(session, str(away.get("id", f"{external_id}-p2")), away.get("name", "TBD"), None, None)
+        def _player_id(p: dict, fallback: str) -> str:
+            return str(p.get("id") or p.get("playerId") or p.get("player_id") or fallback)
+
+        def _player_name(p: dict) -> str:
+            return p.get("name") or p.get("fullName") or p.get("full_name") or "TBD"
+
+        p1 = _upsert_player(session, _player_id(home, f"{external_id}-p1"), _player_name(home), None, None)
+        p2 = _upsert_player(session, _player_id(away, f"{external_id}-p2"), _player_name(away), None, None)
 
         match = session.scalar(select(Match).where(Match.external_id == external_id))
         if match is None:
             match = Match(external_id=external_id, player1_id=p1.id, player2_id=p2.id)
             session.add(match)
 
-        match.tournament_name = raw.get("tournament", {}).get("name", raw.get("tournament_name", "Unknown"))
+        tournament = raw.get("tournament") or {}
+        match.tournament_name = (
+            tournament.get("name") if isinstance(tournament, dict) else None
+        ) or raw.get("tournament_name", "Unknown")
         match.surface = raw.get("surface")
         match.round = raw.get("round")
         match.status = raw.get("status", "scheduled")
-        start = raw.get("start_time") or raw.get("scheduled")
-        match.start_time = dt.datetime.fromisoformat(start.replace("Z", "+00:00")) if start else dt.datetime.utcnow()
+        start = raw.get("start_time") or raw.get("scheduled") or raw.get("date")
+        match.start_time = (
+            dt.datetime.fromisoformat(start.replace("Z", "+00:00")) if start else dt.datetime.utcnow()
+        )
         match.player1_id = p1.id
         match.player2_id = p2.id
         session.flush()
         count += 1
-    logger.info("Synced %d matches for %s", count, date)
+    logger.info("Synced %d matches for tour=%s date=%s", count, tour, date)
     return count
 
 
@@ -135,11 +174,12 @@ def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
 
     results = {"players": 0, "matches": 0, "odds": 0}
     with get_session() as session:
-        results["players"] = sync_rankings(session, client)
         today = dt.date.today()
-        for offset in range(days_ahead):
-            date_str = (today + dt.timedelta(days=offset)).isoformat()
-            results["matches"] += sync_schedule(session, client, date_str)
+        for tour in ("atp", "wta"):
+            results["players"] += sync_rankings(session, client, tour=tour)
+            for offset in range(days_ahead):
+                date_str = (today + dt.timedelta(days=offset)).isoformat()
+                results["matches"] += sync_schedule(session, client, date_str, tour=tour)
         results["odds"] = sync_odds(session, odds_client)
     return results
 
