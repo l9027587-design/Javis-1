@@ -90,8 +90,12 @@ class TennisAPIClient:
 
         url = self.base_url + path.format(**path_params)
         response = self.session.get(url, headers=self._headers(), params=self._params(), timeout=15)
-        if response.status_code in (403, 429):
-            logger.warning("Rate limited by %s (HTTP %d), backing off", self.provider, response.status_code)
+        if not response.ok:
+            # RapidAPI's error body (e.g. "not subscribed", "quota exceeded", "rate
+            # limit") is otherwise swallowed by raise_for_status()'s generic message.
+            logger.warning(
+                "%s returned HTTP %d for %s: %s", self.provider, response.status_code, url, response.text[:500]
+            )
         response.raise_for_status()
         return response.json()
 
