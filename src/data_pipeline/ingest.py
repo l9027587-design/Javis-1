@@ -82,10 +82,14 @@ def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: st
     try:
         data = client.get_schedule(date, tour=tour)
     except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 403:
-            # Some plans only expose fixtures within a limited days-ahead window; a
-            # date beyond that shouldn't abort the whole ingestion run.
-            logger.warning("Schedule for tour=%s date=%s forbidden (plan limit?), skipping", tour, date)
+        if exc.response is not None and exc.response.status_code in (403, 429):
+            # Some plans only expose fixtures within a limited days-ahead window (403),
+            # or the rate limit is still exhausted after _get's own retries (429); a
+            # single date shouldn't abort the whole ingestion run either way.
+            logger.warning(
+                "Schedule for tour=%s date=%s unavailable (HTTP %d), skipping",
+                tour, date, exc.response.status_code,
+            )
             return 0
         raise
     raw_matches = _extract_list(data, "fixtures", "sport_events", "matches", "data", "results")
@@ -165,7 +169,7 @@ def sync_player_results(
         try:
             data = client.get_past_matches(player.external_id, tour=tour)
         except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code in (403, 404):
+            if exc.response is not None and exc.response.status_code in (403, 404, 429):
                 logger.warning(
                     "Past matches for %s (tour=%s) unavailable (HTTP %d), skipping",
                     player.name, tour, exc.response.status_code,
