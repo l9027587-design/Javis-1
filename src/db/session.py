@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.config import settings
@@ -14,8 +14,12 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist yet."""
+    """Create all tables if they don't exist yet, and apply additive column migrations
+    that create_all() can't handle on tables that already existed before the column was
+    added (e.g. `results_synced_at` added to `players`)."""
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE players ADD COLUMN IF NOT EXISTS results_synced_at TIMESTAMP"))
 
 
 @contextmanager

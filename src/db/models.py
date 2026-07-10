@@ -34,6 +34,10 @@ class Player(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )
+    # Set by ingest.sync_player_results after a successful past-matches fetch, so repeat
+    # ingestion runs can skip players already backfilled recently instead of re-spending
+    # a stats-API call on them every run (see RESULTS_FRESHNESS in ingest.py).
+    results_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RankingHistory(Base):
@@ -93,6 +97,17 @@ class Odds(Base):
     player1_decimal_odds: Mapped[float] = mapped_column(Float)
     player2_decimal_odds: Mapped[float] = mapped_column(Float)
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+
+
+class SyncState(Base):
+    """Tracks when a shared (non-player-specific) resource was last successfully fetched,
+    e.g. `rankings:atp` -- lets ingest.py skip re-fetching things that don't change
+    within a day, so a limited daily API quota goes toward fresher data instead."""
+
+    __tablename__ = "sync_state"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime)
 
 
 class Prediction(Base):
