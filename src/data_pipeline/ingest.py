@@ -11,16 +11,37 @@ import logging
 from typing import Any
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, aliased
 
 from src.config import settings
 from src.data_pipeline.api_client import TennisAPIClient
 from src.data_pipeline.odds_client import OddsAPIClient
-from src.db.models import Match, Odds, Player
+from src.db.models import Match, Odds, Player, SyncState
 from src.db.session import get_session, init_db
 
 logger = logging.getLogger(__name__)
+
+# Rankings and a player's match history barely change within a day, but a limited daily
+# API quota (e.g. a RapidAPI Basic-tier plan) gets exhausted fast if every ingestion run
+# re-fetches them anyway. Skip re-fetching resources synced within this window so quota
+# goes toward schedule/odds, which do need to stay fresh.
+RANKINGS_FRESHNESS = dt.timedelta(hours=20)
+RESULTS_FRESHNESS = dt.timedelta(hours=20)
+
+
+def _recently_synced(session: Session, key: str, freshness: dt.timedelta) -> bool:
+    state = session.get(SyncState, key)
+    return state is not None and dt.datetime.utcnow() - state.synced_at < freshness
+
+
+def _mark_synced(session: Session, key: str) -> None:
+    state = session.get(SyncState, key)
+    if state is None:
+        session.add(SyncState(key=key, synced_at=dt.datetime.utcnow()))
+    else:
+        state.synced_at = dt.datetime.utcnow()
+    session.flush()
 
 
 def _upsert_player(session: Session, external_id: str, name: str, rank: int | None, points: int | None) -> Player:
@@ -52,6 +73,10 @@ def _extract_list(data: Any, *keys: str) -> list:
 
 def sync_rankings(session: Session, client: TennisAPIClient, tour: str = "atp") -> int:
     """Fetch current rankings for one tour and upsert players. Returns count synced."""
+    sync_key = f"rankings:{tour}"
+    if _recently_synced(session, sync_key, RANKINGS_FRESHNESS):
+        logger.info("Rankings for tour=%s synced within the last %s, skipping", tour, RANKINGS_FRESHNESS)
+        return 0
     try:
         data = client.get_rankings(tour=tour)
     except requests.HTTPError as exc:
@@ -85,6 +110,7 @@ def sync_rankings(session: Session, client: TennisAPIClient, tour: str = "atp") 
             continue
         _upsert_player(session, external_id, name, rank, points)
         count += 1
+    _mark_synced(session, sync_key)
     logger.info("Synced %d player rankings for tour=%s", count, tour)
     return count
 
@@ -168,11 +194,18 @@ def sync_player_results(
 
     The stats API has no bulk "results by date" endpoint, only completed matches
     per-player, so this walks the top N currently-ranked players (by current_rank,
-    set by sync_rankings) and upserts their match history as status="finished" rows
-    that src/ml/train.py can train on.
+    set by sync_rankings) that haven't been backfilled recently (see RESULTS_FRESHNESS)
+    and upserts their match history as status="finished" rows that src/ml/train.py can
+    train on. Skipping already-fresh players also means later runs naturally reach
+    further down the ranking list instead of re-fetching the same top N every time.
     """
+    cutoff = dt.datetime.utcnow() - RESULTS_FRESHNESS
     players = session.scalars(
-        select(Player).where(Player.current_rank.is_not(None)).order_by(Player.current_rank).limit(limit_players)
+        select(Player)
+        .where(Player.current_rank.is_not(None))
+        .where(or_(Player.results_synced_at.is_(None), Player.results_synced_at < cutoff))
+        .order_by(Player.current_rank)
+        .limit(limit_players)
     ).all()
 
     count = 0
@@ -188,6 +221,7 @@ def sync_player_results(
                 )
                 continue
             raise
+        player.results_synced_at = dt.datetime.utcnow()
 
         raw_matches = _extract_list(data, "matches", "results", "data", "pastMatches")
         if not raw_matches:
