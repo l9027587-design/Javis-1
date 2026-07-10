@@ -27,11 +27,15 @@ ENDPOINTS = {
         "match_summary": "/matches/{match_id}/summary.json",
     },
     "rapidapi": {
-        "base_url": "https://tennis-live-data.p.rapidapi.com",
-        "rankings": "/rankings/atp",
-        "schedule": "/matches/{date}",
-        "player_profile": "/player/{player_id}",
-        "match_summary": "/match/{match_id}",
+        # "Tennis API - ATP WTA ITF" (matchstat.com), docs: tennisapidoc.matchstat.com
+        "base_url": "https://tennis-api-atp-wta-itf.p.rapidapi.com",
+        "rankings": "/tennis/v2/{tour}/ranking/singles",
+        "schedule": "/tennis/v2/{tour}/fixtures/{date}",
+        "player_profile": "/tennis/v2/{tour}/player/profile/{player_id}",
+        # No documented single-match-by-id endpoint on this provider; unused by the
+        # ingest pipeline today (fixtures already carry match data). Placeholder so a
+        # future caller gets a 404 to investigate rather than a str.format() crash.
+        "match_summary": "/tennis/v2/{tour}/fixtures/match/{match_id}",
     },
 }
 
@@ -73,16 +77,16 @@ class TennisAPIClient:
         response.raise_for_status()
         return response.json()
 
-    def get_rankings(self) -> Any:
-        """Current ATP/WTA rankings list."""
-        return self._get(self.endpoints["rankings"])
+    def get_rankings(self, tour: str = "atp") -> Any:
+        """Current ATP or WTA singles rankings list. tour: 'atp' or 'wta'."""
+        return self._get(self.endpoints["rankings"], tour=tour)
 
-    def get_schedule(self, date: str) -> Any:
-        """Matches scheduled for a given date, format YYYY-MM-DD."""
-        return self._get(self.endpoints["schedule"], date=date)
+    def get_schedule(self, date: str, tour: str = "atp") -> Any:
+        """Matches scheduled for a given date (YYYY-MM-DD) and tour ('atp' or 'wta')."""
+        return self._get(self.endpoints["schedule"], tour=tour, date=date)
 
-    def get_player_profile(self, player_id: str) -> Any:
-        return self._get(self.endpoints["player_profile"], player_id=player_id)
+    def get_player_profile(self, player_id: str, tour: str = "atp") -> Any:
+        return self._get(self.endpoints["player_profile"], tour=tour, player_id=player_id)
 
-    def get_match_summary(self, match_id: str) -> Any:
-        return self._get(self.endpoints["match_summary"], match_id=match_id)
+    def get_match_summary(self, match_id: str, tour: str = "atp") -> Any:
+        return self._get(self.endpoints["match_summary"], tour=tour, match_id=match_id)
