@@ -28,7 +28,10 @@ def _normalize_database_url(url: str) -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    tennis_api_provider: str = os.getenv("TENNIS_API_PROVIDER", "rapidapi")
+    # `os.getenv(name) or default` (not the two-arg form) is deliberate: GitHub Actions
+    # sets a referenced-but-undefined `vars.X` to an empty string rather than leaving it
+    # unset, which would silently defeat a `os.getenv(name, default)` fallback.
+    tennis_api_provider: str = os.getenv("TENNIS_API_PROVIDER") or "rapidapi"
     tennis_api_key: str = os.getenv("TENNIS_API_KEY", "")
     tennis_api_host: str = os.getenv("TENNIS_API_HOST", "")
 
@@ -37,17 +40,17 @@ class Settings:
     # "tipico_de" is Tipico's feed on The Odds API — a documented, ToS-compliant
     # source (we never scrape tipico.de directly). Leave empty to fall back to
     # the broader eu/uk/us region odds instead of one specific bookmaker.
-    odds_bookmakers: str = os.getenv("ODDS_BOOKMAKERS", "tipico_de")
+    odds_bookmakers: str = os.getenv("ODDS_BOOKMAKERS") or "tipico_de"
 
     database_url: str = _normalize_database_url(
-        os.getenv("DATABASE_URL", "postgresql+psycopg2://user:password@localhost:5432/tennis")
+        os.getenv("DATABASE_URL") or "postgresql+psycopg2://user:password@localhost:5432/tennis"
     )
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    openai_model: str = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
 
     model_s3_bucket: str = os.getenv("MODEL_S3_BUCKET", "")
-    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
+    aws_region: str = os.getenv("AWS_REGION") or "us-east-1"
 
 
 settings = Settings()
