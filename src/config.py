@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
@@ -17,10 +18,12 @@ def _require(name: str, default: str | None = None) -> str:
 
 
 def _clean(value: str) -> str:
-    """Strip whitespace/newlines and wrapping quotes that mobile copy-paste into a
-    GitHub secret tends to carry over — invisible in the UI but invalid as an HTTP
-    header value or breaking exact-match comparisons."""
-    return value.strip().strip("'\"")
+    """Strip wrapping quotes and *all* whitespace/newlines, including in the middle
+    of the value — mobile copy-paste out of a wrapped code block can splice a
+    newline into the middle of a token, not just at the ends, which is invisible in
+    the GitHub secrets UI but invalid as an HTTP header value."""
+    value = value.strip().strip("'\"")
+    return re.sub(r"\s+", "", value)
 
 
 def _normalize_database_url(url: str) -> str:
