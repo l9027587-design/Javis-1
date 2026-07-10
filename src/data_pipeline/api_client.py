@@ -37,6 +37,10 @@ ENDPOINTS = {
         "schedule": "/schedules/{date}/schedule.json",
         "player_profile": "/competitors/{player_id}/profile.json",
         "match_summary": "/matches/{match_id}/summary.json",
+        # Unverified guess, mirroring the RapidAPI shape below -- Sportradar isn't the
+        # provider actually configured/tested today (see TENNIS_API_PROVIDER); fill in
+        # from Sportradar's docs for your subscribed plan before relying on this.
+        "past_matches": "/competitors/{player_id}/results.json",
     },
     "rapidapi": {
         # "Tennis API - ATP WTA ITF" (matchstat.com), docs: tennisapidoc.matchstat.com
@@ -48,6 +52,9 @@ ENDPOINTS = {
         # ingest pipeline today (fixtures already carry match data). Placeholder so a
         # future caller gets a 404 to investigate rather than a str.format() crash.
         "match_summary": "/tennis/v2/{tour}/fixtures/match/{match_id}",
+        # Completed matches for one player, most recent first -- used to backfill
+        # training data (see sync_player_results in ingest.py).
+        "past_matches": "/tennis/v2/{tour}/player/past-matches/{player_id}",
     },
 }
 
@@ -109,6 +116,10 @@ class TennisAPIClient:
 
     def get_player_profile(self, player_id: str, tour: str = "atp") -> Any:
         return self._get(self.endpoints["player_profile"], tour=tour, player_id=player_id)
+
+    def get_past_matches(self, player_id: str, tour: str = "atp") -> Any:
+        """Completed matches for one player, most recent first."""
+        return self._get(self.endpoints["past_matches"], tour=tour, player_id=player_id)
 
     def get_match_summary(self, match_id: str, tour: str = "atp") -> Any:
         return self._get(self.endpoints["match_summary"], tour=tour, match_id=match_id)

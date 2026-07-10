@@ -29,8 +29,12 @@ def _upsert_player(session: Session, external_id: str, name: str, rank: int | No
         player = Player(external_id=external_id, name=name)
         session.add(player)
     player.name = name
-    player.current_rank = rank
-    player.current_points = points
+    # Callers that don't know rank/points (e.g. schedule sync, which only has names)
+    # pass None -- don't let that clobber values sync_rankings already set.
+    if rank is not None:
+        player.current_rank = rank
+    if points is not None:
+        player.current_points = points
     session.flush()
     return player
 
@@ -135,6 +139,100 @@ def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: st
     return count
 
 
+# Kept small: each player costs one API call, and the free-tier stats API is already
+# rate-limited (see api_client.py). Run the pipeline repeatedly to build up history --
+# each call also refreshes already-seen matches, so nothing is lost between runs.
+RESULTS_PLAYERS_PER_TOUR = 10
+
+
+def sync_player_results(
+    session: Session, client: TennisAPIClient, tour: str, limit_players: int = RESULTS_PLAYERS_PER_TOUR
+) -> int:
+    """Backfill finished matches (with winner + score) for the top-ranked players on one tour.
+
+    The stats API has no bulk "results by date" endpoint, only completed matches
+    per-player, so this walks the top N currently-ranked players (by current_rank,
+    set by sync_rankings) and upserts their match history as status="finished" rows
+    that src/ml/train.py can train on.
+    """
+    players = session.scalars(
+        select(Player).where(Player.current_rank.is_not(None)).order_by(Player.current_rank).limit(limit_players)
+    ).all()
+
+    count = 0
+    seen_external_ids: set[str] = set()
+    for player in players:
+        try:
+            data = client.get_past_matches(player.external_id, tour=tour)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code in (403, 404):
+                logger.warning(
+                    "Past matches for %s (tour=%s) unavailable (HTTP %d), skipping",
+                    player.name, tour, exc.response.status_code,
+                )
+                continue
+            raise
+
+        raw_matches = _extract_list(data, "matches", "results", "data", "pastMatches")
+        if not raw_matches:
+            logger.warning(
+                "No past matches parsed for player=%s tour=%s; raw response keys/sample: %s",
+                player.name,
+                tour,
+                list(data.keys()) if isinstance(data, dict) else str(data)[:300],
+            )
+
+        for raw in raw_matches:
+            external_id = str(raw.get("id") or raw.get("matchId") or "")
+            raw_p1, raw_p2 = raw.get("player1") or {}, raw.get("player2") or {}
+            if not external_id or external_id == "None" or not raw_p1 or not raw_p2:
+                continue
+            if external_id in seen_external_ids:
+                continue  # already synced this run, e.g. a match between two top-N players
+            seen_external_ids.add(external_id)
+
+            def _pid(p: dict) -> str:
+                return str(p.get("id") or p.get("playerId") or "")
+
+            def _pname(p: dict) -> str:
+                return p.get("name") or p.get("fullName") or "Unknown"
+
+            p1 = _upsert_player(session, _pid(raw_p1), _pname(raw_p1), None, None)
+            p2 = _upsert_player(session, _pid(raw_p2), _pname(raw_p2), None, None)
+
+            # Historical results conventionally list the winner as player1; use an
+            # explicit winner field instead if the API provides one.
+            winner_field = raw.get("winnerId") or raw.get("winner_id") or (raw.get("winner") or {}).get("id")
+            winner_id = p2.id if winner_field is not None and str(winner_field) == _pid(raw_p2) else p1.id
+
+            match = session.scalar(select(Match).where(Match.external_id == external_id))
+            if match is None:
+                match = Match(external_id=external_id, player1_id=p1.id, player2_id=p2.id)
+                session.add(match)
+
+            tournament = raw.get("tournament") or {}
+            match.tournament_name = (
+                tournament.get("name") if isinstance(tournament, dict) else None
+            ) or raw.get("tournament_name", "Unknown")
+            match.surface = raw.get("surface") or (tournament.get("surface") if isinstance(tournament, dict) else None)
+            round_ = raw.get("round")
+            match.round = round_.get("name") if isinstance(round_, dict) else round_
+            match.status = "finished"
+            match.winner_id = winner_id
+            match.score = raw.get("result") or raw.get("score")
+            start = raw.get("date") or raw.get("start_time")
+            match.start_time = (
+                dt.datetime.fromisoformat(start.replace("Z", "+00:00")) if start else dt.datetime.utcnow()
+            )
+            match.player1_id = p1.id
+            match.player2_id = p2.id
+            session.flush()
+            count += 1
+
+    logger.info("Synced %d finished results for tour=%s (top %d ranked players)", count, tour, limit_players)
+    return count
+
+
 def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
     """Fetch current odds and record a snapshot per match found by fuzzy name match.
 
@@ -181,11 +279,11 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
 
 
 def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
-    """Full ingestion cycle: rankings, next `days_ahead` days of schedule, and odds."""
+    """Full ingestion cycle: rankings, next `days_ahead` days of schedule, results, and odds."""
     init_db()
     client = TennisAPIClient()
 
-    results = {"players": 0, "matches": 0, "odds": 0}
+    results = {"players": 0, "matches": 0, "results": 0, "odds": 0}
     with get_session() as session:
         today = dt.date.today()
         for tour in ("atp", "wta"):
@@ -193,6 +291,7 @@ def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
             for offset in range(days_ahead):
                 date_str = (today + dt.timedelta(days=offset)).isoformat()
                 results["matches"] += sync_schedule(session, client, date_str, tour=tour)
+            results["results"] += sync_player_results(session, client, tour=tour)
             results["odds"] += sync_odds(session, OddsAPIClient(tour_prefix=f"tennis_{tour}"))
     return results
 
