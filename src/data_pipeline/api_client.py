@@ -8,14 +8,26 @@ query-param API key, RapidAPI's header-based key) are handled in `_headers`/`_pa
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """RapidAPI's Basic/free tiers enforce a per-second rate limit and report it as a
+    plain 403 (not 429) — retry those with backoff instead of failing the whole run."""
+    return isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code in (403, 429)
+
+
+# Minimum gap between requests to a single provider, to stay under RapidAPI Basic-tier
+# per-second rate limits (which the ingest loop would otherwise hit on its ~8 calls/run).
+MIN_REQUEST_INTERVAL_SECONDS = 1.1
 
 # Fill these in to match your subscribed product's actual paths.
 ENDPOINTS = {
@@ -48,6 +60,7 @@ class TennisAPIClient:
         self.endpoints = ENDPOINTS[self.provider]
         self.base_url = self.endpoints["base_url"]
         self.session = requests.Session()
+        self._last_request_at: float = 0.0
 
     def _headers(self) -> dict[str, str]:
         if self.provider == "rapidapi":
@@ -64,16 +77,21 @@ class TennisAPIClient:
 
     @retry(
         reraise=True,
-        stop=stop_after_attempt(4),
+        stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=1, max=20),
-        retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
+        retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout))
+        | retry_if_exception(_is_rate_limit_error),
     )
     def _get(self, path: str, **path_params: str) -> Any:
+        elapsed = time.monotonic() - self._last_request_at
+        if elapsed < MIN_REQUEST_INTERVAL_SECONDS:
+            time.sleep(MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+        self._last_request_at = time.monotonic()
+
         url = self.base_url + path.format(**path_params)
         response = self.session.get(url, headers=self._headers(), params=self._params(), timeout=15)
-        if response.status_code == 429:
-            logger.warning("Rate limited by %s, backing off", self.provider)
-            response.raise_for_status()
+        if response.status_code in (403, 429):
+            logger.warning("Rate limited by %s (HTTP %d), backing off", self.provider, response.status_code)
         response.raise_for_status()
         return response.json()
 
