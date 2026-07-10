@@ -1,0 +1,216 @@
+(() => {
+  "use strict";
+
+  const state = { matches: [], selectedId: null, voiceOn: true, history: [] };
+
+  const el = (sel) => document.querySelector(sel);
+  const clockEl = el("#clock");
+  const statusPill = el("#status-pill");
+  const statusText = el("#status-text");
+  const sourceLabel = el("#data-source-label");
+  const matchListEl = el("#match-list");
+  const detailEl = el("#match-detail");
+  const tickerEl = el("#ticker");
+  const chatLog = el("#chat-log");
+  const chatForm = el("#chat-form");
+  const chatInput = el("#chat-input");
+  const voiceToggle = el("#voice-toggle");
+
+  function tick() {
+    const now = new Date();
+    clockEl.textContent = now.toUTCString().slice(17, 25) + " UTC";
+  }
+  setInterval(tick, 1000);
+  tick();
+
+  function pct(x) { return `${Math.round(x * 100)}%`; }
+
+  function fmtTime(iso) {
+    try {
+      return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    } catch { return iso; }
+  }
+
+  async function loadStatus() {
+    try {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+      statusPill.classList.toggle("online", !data.demo_mode);
+      statusPill.classList.toggle("demo", data.demo_mode);
+      statusText.textContent = data.demo_mode ? "SIMULATION MODE" : "LIVE";
+      sourceLabel.textContent = `data source: ${data.data_source}`;
+    } catch (e) {
+      statusText.textContent = "OFFLINE";
+    }
+  }
+
+  function renderMatchList() {
+    if (!state.matches.length) {
+      matchListEl.innerHTML = '<div class="loading">NO FIXTURES FOUND</div>';
+      return;
+    }
+    matchListEl.innerHTML = state.matches.map((m) => `
+      <div class="match-card ${m.match_id === state.selectedId ? "selected" : ""}" data-id="${m.match_id}">
+        <div class="mc-top"><span>${m.tournament} · ${m.round}</span><span>${fmtTime(m.start_time)}</span></div>
+        <div class="mc-players"><b>${m.player1.name}</b> vs <b>${m.player2.name}</b></div>
+        <div class="mc-value">
+          ${m.is_value_bet ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>` : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
+        </div>
+      </div>
+    `).join("");
+    matchListEl.querySelectorAll(".match-card").forEach((card) => {
+      card.addEventListener("click", () => selectMatch(parseInt(card.dataset.id, 10)));
+    });
+  }
+
+  function renderDetail(m) {
+    if (!m) {
+      detailEl.innerHTML = '<div class="placeholder">Select a match to run the analysis.</div>';
+      return;
+    }
+    const p1 = m.player1, p2 = m.player2;
+    const p1Pct = m.player1_win_prob, p2Pct = m.player2_win_prob;
+    detailEl.innerHTML = `
+      <div class="detail-head"><span class="tourney">${m.tournament} — ${m.round} — ${m.surface}</span></div>
+      <div class="detail-players">${p1.name}<span class="vs">VS</span>${p2.name}</div>
+
+      <div class="prob-row">
+        <div class="prob-col">
+          <div class="name">${p1.name}</div>
+          <div class="gauge"><div class="gauge-fill" style="width:${pct(p1Pct)}"></div></div>
+          <div class="prob-pct">${pct(p1Pct)}</div>
+        </div>
+        <div class="prob-col">
+          <div class="name">${p2.name}</div>
+          <div class="gauge"><div class="gauge-fill" style="width:${pct(p2Pct)}"></div></div>
+          <div class="prob-pct">${pct(p2Pct)}</div>
+        </div>
+      </div>
+
+      <div class="odds-grid">
+        <div class="odds-box"><div class="label">TIPICO — ${p1.name.split(" ").pop()}</div><div class="val">${m.tipico_player1_odds.toFixed(2)}</div></div>
+        <div class="odds-box"><div class="label">TIPICO — ${p2.name.split(" ").pop()}</div><div class="val">${m.tipico_player2_odds.toFixed(2)}</div></div>
+        <div class="odds-box ${m.expected_value >= 0 ? "ev-positive" : "ev-negative"}"><div class="label">EXPECTED VALUE</div><div class="val">${m.expected_value >= 0 ? "+" : ""}${(m.expected_value * 100).toFixed(1)}%</div></div>
+      </div>
+
+      ${m.is_value_bet ? `<div class="value-banner">VALUE BET DETECTED — model favors ${m.pick} beyond Tipico's price</div>` : ""}
+    `;
+  }
+
+  function selectMatch(id) {
+    state.selectedId = id;
+    renderMatchList();
+    renderDetail(state.matches.find((m) => m.match_id === id));
+  }
+
+  async function loadMatches() {
+    try {
+      const res = await fetch("/api/matches");
+      const data = await res.json();
+      state.matches = data.matches || [];
+      renderMatchList();
+      if (state.matches.length && state.selectedId === null) {
+        selectMatch(state.matches[0].match_id);
+      }
+    } catch (e) {
+      matchListEl.innerHTML = '<div class="loading">CONNECTION LOST</div>';
+    }
+  }
+
+  async function loadTicker() {
+    try {
+      const res = await fetch("/api/value-bets");
+      const data = await res.json();
+      const bets = data.value_bets || [];
+      if (!bets.length) {
+        tickerEl.innerHTML = "<span>No positive-EV bets against Tipico's line right now.</span>";
+        return;
+      }
+      const text = bets.map((b) => {
+        const pick = b.pick || (b.player1_win_prob >= 0.5 ? b.player1?.name : b.player2?.name);
+        return `${pick} @ ${b.tournament} — EV ${(b.expected_value * 100).toFixed(1)}%`;
+      }).join("     •     ");
+      tickerEl.innerHTML = `<span>${text}</span>`;
+    } catch (e) {
+      tickerEl.innerHTML = "<span>Ticker offline.</span>";
+    }
+  }
+
+  function speak(text) {
+    if (!state.voiceOn || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.02;
+    utter.pitch = 0.75;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find((v) => /en-GB|male/i.test(v.name)) || voices[0];
+    if (preferred) utter.voice = preferred;
+    window.speechSynthesis.speak(utter);
+  }
+
+  function addMessage(who, text, animate) {
+    const wrap = document.createElement("div");
+    wrap.className = `msg ${who}`;
+    wrap.innerHTML = `<span class="who">${who === "jarvis" ? "JARVIS" : "YOU"}</span><span class="txt"></span>`;
+    chatLog.appendChild(wrap);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    const txtEl = wrap.querySelector(".txt");
+
+    if (!animate) {
+      txtEl.textContent = text;
+      wrap.classList.add("done");
+      return;
+    }
+    let i = 0;
+    const step = () => {
+      txtEl.textContent = text.slice(0, i);
+      chatLog.scrollTop = chatLog.scrollHeight;
+      i += 2;
+      if (i <= text.length) {
+        requestAnimationFrame(() => setTimeout(step, 12));
+      } else {
+        txtEl.textContent = text;
+        wrap.classList.add("done");
+      }
+    };
+    step();
+  }
+
+  async function sendMessage(message) {
+    addMessage("user", message, false);
+    state.history.push({ role: "user", content: message });
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, history: state.history.slice(-10) }),
+      });
+      const data = await res.json();
+      addMessage("jarvis", data.reply, true);
+      speak(data.reply);
+      state.history.push({ role: "assistant", content: data.reply });
+    } catch (e) {
+      addMessage("jarvis", "Connection to the analysis core was interrupted, sir.", true);
+    }
+  }
+
+  chatForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const val = chatInput.value.trim();
+    if (!val) return;
+    chatInput.value = "";
+    sendMessage(val);
+  });
+
+  voiceToggle.addEventListener("click", () => {
+    state.voiceOn = !state.voiceOn;
+    voiceToggle.classList.toggle("muted", !state.voiceOn);
+    voiceToggle.textContent = state.voiceOn ? "🔊" : "🔇";
+    if (!state.voiceOn && "speechSynthesis" in window) window.speechSynthesis.cancel();
+  });
+
+  loadStatus();
+  loadMatches().then(loadTicker);
+  setInterval(loadStatus, 30000);
+  setInterval(loadTicker, 45000);
+})();

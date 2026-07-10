@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>J.A.R.V.I.S. — Tennis Intelligence</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2244%22 fill=%22%23050a12%22 stroke=%22%2357e8ff%22 stroke-width=%226%22/><circle cx=%2250%22 cy=%2250%22 r=%2218%22 fill=%22%2357e8ff%22/></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<canvas id="bg-grid"></canvas>
+
+<div class="scanline"></div>
+
+<header class="hud-header">
+  <div class="reactor" id="reactor">
+    <svg viewBox="0 0 120 120">
+      <circle class="ring ring-outer" cx="60" cy="60" r="54"/>
+      <circle class="ring ring-mid" cx="60" cy="60" r="40"/>
+      <circle class="ring ring-inner" cx="60" cy="60" r="26"/>
+      <circle class="core" cx="60" cy="60" r="10"/>
+    </svg>
+  </div>
+  <div class="title-block">
+    <h1>J.A.R.V.I.S.</h1>
+    <p class="subtitle">Just A Rather Very Intelligent System — Tennis Prediction &amp; Betting Intelligence</p>
+  </div>
+  <div class="status-block">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">CONNECTING…</span></div>
+  </div>
+</header>
+
+<main class="hud-grid">
+
+  <section class="panel matches-panel">
+    <h2><span class="bracket">[</span> UPCOMING MATCHES <span class="bracket">]</span></h2>
+    <div class="panel-sub" id="data-source-label">data source: —</div>
+    <div id="match-list" class="match-list">
+      <div class="loading">SCANNING FIXTURES…</div>
+    </div>
+  </section>
+
+  <section class="panel detail-panel">
+    <h2><span class="bracket">[</span> MATCH ANALYSIS <span class="bracket">]</span></h2>
+    <div id="match-detail" class="match-detail">
+      <div class="placeholder">Select a match to run the analysis.</div>
+    </div>
+  </section>
+
+  <section class="panel chat-panel">
+    <h2><span class="bracket">[</span> ASSISTANT <span class="bracket">]</span></h2>
+    <div id="chat-log" class="chat-log">
+      <div class="msg jarvis"><span class="who">JARVIS</span><span class="txt">Systems online. Ask me about upcoming matches, a specific player, or say "best value bets".</span></div>
+    </div>
+    <form id="chat-form" class="chat-form">
+      <input id="chat-input" type="text" autocomplete="off" placeholder="Ask JARVIS…" />
+      <button type="submit">SEND</button>
+      <button type="button" id="voice-toggle" title="Toggle voice output">🔊</button>
+    </form>
+  </section>
+
+</main>
+
+<footer class="ticker-wrap">
+  <div class="ticker-label">VALUE&nbsp;BETS</div>
+  <div class="ticker" id="ticker"><span>Loading value bets…</span></div>
+</footer>
+
+<script src="/js/app.js"></script>
+</body>
+</html>

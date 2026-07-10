@@ -31,6 +31,26 @@ class OddsAPIClient:
         response.raise_for_status()
         return response.json()
 
+    @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    def get_odds_for_bookmakers(self, bookmakers: str, markets: str = "h2h") -> list[dict[str, Any]]:
+        """Returns events with odds filtered to specific bookmaker keys (e.g. 'tipico_de').
+
+        The Odds API carries Tipico as a licensed bookmaker feed, so this is the
+        ToS-compliant way to get "Tipico odds" — we never scrape tipico.de directly,
+        which would violate their terms of service and is explicitly the kind of thing
+        this project avoids (see ARCHITECTURE.md).
+        """
+        url = f"{BASE_URL}/sports/{self.sport_key}/odds"
+        params = {
+            "apiKey": settings.odds_api_key,
+            "bookmakers": bookmakers,
+            "markets": markets,
+            "oddsFormat": "decimal",
+        }
+        response = self.session.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        return response.json()
+
     @staticmethod
     def best_prices(event: dict[str, Any]) -> dict[str, tuple[str, float]] | None:
         """Given one event payload, return {player_name: (bookmaker, best_decimal_odds)}."""

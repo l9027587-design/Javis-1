@@ -57,10 +57,13 @@ of the LLM hallucinating stats, which matters a lot for anything bet-related.
 - `odds_client.py` — client for [The Odds API](https://the-odds-api.com) (`tennis_atp` /
   `tennis_wta` sports keys), a documented, inexpensive odds source with a stable REST
   contract. Good complement to Sportradar/RapidAPI, which often don't include live
-  bookmaker odds on cheaper tiers.
+  bookmaker odds on cheaper tiers. `get_odds_for_bookmakers()` filters to specific
+  bookmaker keys — by default `tipico_de`, so the odds recorded are Tipico's — via The
+  Odds API's own `bookmakers` param, rather than scraping tipico.de directly.
 - `ingest.py` — orchestrates one ingestion cycle: pull rankings → upsert `players`;
-  pull upcoming schedule → upsert `matches`; pull odds for those matches → insert
-  `odds` snapshots (append-only, so line movement over time is preserved).
+  pull upcoming schedule → upsert `matches`; pull Tipico odds (falling back to the
+  broader eu/uk/us region odds if Tipico hasn't posted a line yet) for those matches →
+  insert `odds` snapshots (append-only, so line movement over time is preserved).
 
 ### 2.2 Storage (`src/db/`)
 Postgres via SQLAlchemy. Chosen over a NoSQL/BigQuery option because the domain is
@@ -92,8 +95,23 @@ Tables: `players`, `ranking_history`, `matches`, `match_stats`, `odds`, `predict
   schemas to the model, execute whichever tools it asks for, feed results back, get a
   final natural-language answer. System prompt constrains it to only state facts backed
   by tool output and to always disclose the model's edge/EV numbers, not just a verdict.
-- `cli.py` — a REPL so you can ask questions from a terminal; the same `assistant.py`
-  function is trivially wrapped in a FastAPI endpoint or Slack/Telegram bot later.
+- `cli.py` — a REPL so you can ask questions from a terminal.
+
+### 2.5 Web layer (`src/web/`, `static/`)
+- `app.py` — a FastAPI app exposing `/api/status`, `/api/matches`, `/api/value-bets`,
+  `/api/chat`, and serving the `static/` frontend. Each read endpoint tries the real
+  pipeline (Postgres + trained model) first; if that's unavailable (no `DATABASE_URL`
+  configured, empty DB, etc.) it transparently falls back to `demo_data.py`'s simulated
+  matches/Tipico-style odds so the UI is always explorable, with every response tagged
+  `"demo": true/false` so the frontend can show a clear SIMULATION MODE badge instead of
+  silently presenting fake numbers as real. `/api/chat` uses the OpenAI-backed
+  `assistant.ask()` when `OPENAI_API_KEY` is set, else a small rule-based offline
+  responder built on the same tool functions/demo data.
+- `static/` — a single-page "JARVIS" HUD: dark holographic theme, an animated
+  arc-reactor status indicator, per-match win-probability/odds/EV cards, a scrolling
+  value-bet ticker, and a chat panel with a typewriter effect and optional
+  browser-native text-to-speech (`SpeechSynthesis`) so answers are "spoken" back,
+  reminiscent of Iron Man's J.A.R.V.I.S. Plain HTML/CSS/JS — no build step.
 
 ### 2.5 Scheduling & deployment (`cloud/`)
 Two independent scheduled jobs, deployed as containers so `xgboost`/`pandas` fit

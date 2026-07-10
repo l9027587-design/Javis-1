@@ -23,6 +23,11 @@ class Settings:
     tennis_api_host: str = os.getenv("TENNIS_API_HOST", "")
 
     odds_api_key: str = os.getenv("ODDS_API_KEY", "")
+    # Bookmaker key(s) on The Odds API to pull odds from, comma-separated.
+    # "tipico_de" is Tipico's feed on The Odds API — a documented, ToS-compliant
+    # source (we never scrape tipico.de directly). Leave empty to fall back to
+    # the broader eu/uk/us region odds instead of one specific bookmaker.
+    odds_bookmakers: str = os.getenv("ODDS_BOOKMAKERS", "tipico_de")
 
     database_url: str = os.getenv(
         "DATABASE_URL", "postgresql+psycopg2://user:password@localhost:5432/tennis"
