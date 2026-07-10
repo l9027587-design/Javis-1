@@ -16,6 +16,16 @@ def _require(name: str, default: str | None = None) -> str:
     return value
 
 
+def _normalize_database_url(url: str) -> str:
+    """Accept a plain 'postgresql://...' URL (e.g. copied straight from a hosting
+    provider's dashboard) and rewrite it to use the psycopg2 driver SQLAlchemy needs.
+    Also strips stray wrapping quotes/whitespace from manual copy-paste."""
+    url = url.strip().strip("'\"")
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://") :]
+    return url
+
+
 @dataclass(frozen=True)
 class Settings:
     tennis_api_provider: str = os.getenv("TENNIS_API_PROVIDER", "rapidapi")
@@ -29,8 +39,8 @@ class Settings:
     # the broader eu/uk/us region odds instead of one specific bookmaker.
     odds_bookmakers: str = os.getenv("ODDS_BOOKMAKERS", "tipico_de")
 
-    database_url: str = os.getenv(
-        "DATABASE_URL", "postgresql+psycopg2://user:password@localhost:5432/tennis"
+    database_url: str = _normalize_database_url(
+        os.getenv("DATABASE_URL", "postgresql+psycopg2://user:password@localhost:5432/tennis")
     )
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
