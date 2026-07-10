@@ -52,7 +52,19 @@ def _extract_list(data: Any, *keys: str) -> list:
 
 def sync_rankings(session: Session, client: TennisAPIClient, tour: str = "atp") -> int:
     """Fetch current rankings for one tour and upsert players. Returns count synced."""
-    data = client.get_rankings(tour=tour)
+    try:
+        data = client.get_rankings(tour=tour)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code in (403, 429):
+            # e.g. a RapidAPI Basic-tier plan's daily quota exhausted -- that's still
+            # exhausted for every other call this run too, but the rest of ingestion
+            # (schedule/results already tolerate this, and odds is a separate API) should
+            # still get a chance to run rather than aborting the whole cycle here.
+            logger.warning(
+                "Rankings for tour=%s unavailable (HTTP %d), skipping", tour, exc.response.status_code
+            )
+            return 0
+        raise
     entries = _extract_list(data, "rankings", "data", "results", "players")
     if not entries:
         logger.warning(
