@@ -32,6 +32,29 @@ REPO_CANDIDATES: dict[str, list[str]] = {
     "wta": ["JeffSackmann/tennis_wta"],
 }
 
+# Each candidate repo names its files differently -- confirmed live via the "sample:"
+# listing surfaced by a previous mismatch (e.g. TML-Database's match files are bare
+# "{year}.csv", not "atp_matches_{year}.csv"; it has no rankings snapshot at all, unlike
+# Sackmann's repos, hence None). A repo missing a `kind` entirely (not just a wrong
+# filename) means that tour's data for that kind just isn't available there.
+REPO_FILE_PATTERNS: dict[str, dict[str, str | None]] = {
+    "JeffSackmann/tennis_atp": {
+        "players": "atp_players.csv",
+        "rankings": "atp_rankings_current.csv",
+        "matches": "atp_matches_{year}.csv",
+    },
+    "JeffSackmann/tennis_wta": {
+        "players": "wta_players.csv",
+        "rankings": "wta_rankings_current.csv",
+        "matches": "wta_matches_{year}.csv",
+    },
+    "Tennismylife/TML-Database": {
+        "players": "ATP_Database.csv",
+        "rankings": None,
+        "matches": "{year}.csv",
+    },
+}
+
 
 def _raise_with_body(response: requests.Response) -> None:
     """requests' default HTTPError message omits the response body, which for the GitHub
@@ -73,24 +96,26 @@ def _repo_file_index(repo: str) -> tuple[tuple[str, str], ...]:
     return tuple(entries)
 
 
-def _resolve(tour: str, exact: str, prefix: str) -> str:
+def _resolve(tour: str, kind: str, **fmt_kwargs: object) -> str:
     """Try each candidate repo for this tour in turn; return the download URL of the
-    first matching file (by exact name, then by prefix)."""
+    named `kind` ("players"/"rankings"/"matches") of data from the first repo that has
+    both a pattern for it and an actual matching file."""
     errors: list[str] = []
     for repo in REPO_CANDIDATES.get(tour, []):
+        pattern = REPO_FILE_PATTERNS.get(repo, {}).get(kind)
+        if pattern is None:
+            errors.append(f"{repo}: no '{kind}' data in this repo")
+            continue
+        filename = pattern.format(**fmt_kwargs)
         try:
             names = dict(_repo_file_index(repo))
         except requests.RequestException as exc:
             errors.append(f"{repo}: {exc}")
             continue
-        if exact in names:
-            return names[exact]
-        matches = sorted(n for n in names if n.startswith(prefix))
-        if matches:
-            return names[matches[0]]
-        sample = ", ".join(sorted(names)[:15])
-        errors.append(f"{repo}: no file matching '{prefix}*' among {len(names)} files (sample: {sample})")
-    raise FileNotFoundError(f"No source found for tour={tour} prefix='{prefix}': " + "; ".join(errors))
+        if filename in names:
+            return names[filename]
+        errors.append(f"{repo}: '{filename}' not found among {len(names)} files: {', '.join(sorted(names))}")
+    raise FileNotFoundError(f"No source found for tour={tour} kind='{kind}': " + "; ".join(errors))
 
 
 def _fetch_csv(url: str) -> pd.DataFrame:
@@ -101,14 +126,14 @@ def _fetch_csv(url: str) -> pd.DataFrame:
 
 def get_players(tour: str) -> pd.DataFrame:
     """Master player list: player_id, name_first, name_last, hand, dob, ioc, height."""
-    return _fetch_csv(_resolve(tour, f"{tour}_players.csv", f"{tour}_players"))
+    return _fetch_csv(_resolve(tour, "players"))
 
 
 def get_current_rankings(tour: str) -> pd.DataFrame:
     """Latest available rankings snapshot: ranking_date, rank, player (id), points."""
-    return _fetch_csv(_resolve(tour, f"{tour}_rankings_current.csv", f"{tour}_rankings_current"))
+    return _fetch_csv(_resolve(tour, "rankings"))
 
 
 def get_matches(tour: str, year: int) -> pd.DataFrame:
     """Tour-level main-draw match results for one season."""
-    return _fetch_csv(_resolve(tour, f"{tour}_matches_{year}.csv", f"{tour}_matches_{year}"))
+    return _fetch_csv(_resolve(tour, "matches", year=year))
