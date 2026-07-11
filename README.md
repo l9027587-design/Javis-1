@@ -53,6 +53,24 @@ so you can see the whole interface immediately (clearly labeled "SIMULATION MODE
 Once `DATABASE_URL`, a tennis-stats API key, `ODDS_API_KEY`, and `OPENAI_API_KEY`
 are configured and the pipeline has run, it automatically switches to live data.
 
+### Using it from your phone
+
+`localhost` only works on the machine running `uvicorn`. To open the HUD from a
+phone browser from anywhere, deploy it to a free host:
+
+1. Push this repo to GitHub (already done if you're reading this on GitHub).
+2. Create a free account at **[render.com](https://render.com)** and choose
+   "New +" → "Blueprint", pointing it at this repo. It auto-detects `render.yaml`
+   at the repo root and provisions a free web service running the HUD.
+3. Render gives you a public HTTPS URL (e.g. `https://javis-tennis-ai.onrender.com`)
+   — open that on your phone. It works immediately in SIMULATION MODE; add the env
+   vars from `.env.example` in the Render dashboard (Environment tab) once you have
+   real API keys, no redeploy needed.
+
+The free tier spins the service down after 15 minutes idle and takes ~30s to wake
+back up on the next request — fine for personal use, just expect a short delay on
+the first load after a while away.
+
 ### Tipico as the odds source
 
 Odds are sourced from **[The Odds API](https://the-odds-api.com)**, which carries
