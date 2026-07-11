@@ -20,7 +20,10 @@ BASE_URL = "https://api.balldontlie.io"
 
 
 def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {settings.balldontlie_api_key}"}
+    # Confirmed via BALLDONTLIE's docs: the raw key goes directly in Authorization,
+    # no "Bearer " prefix (unlike most APIs) -- getting-started guide shows
+    # `-H "Authorization: YOUR_API_KEY"` verbatim.
+    return {"Authorization": settings.balldontlie_api_key}
 
 
 def _get(path: str, params: dict[str, Any] | None = None) -> Any:
