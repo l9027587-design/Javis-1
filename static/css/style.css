@@ -214,6 +214,13 @@ html, body {
 .msg .txt { white-space: pre-wrap; }
 .msg.jarvis .txt::after { content: "▌"; animation: blink 1s infinite; color: var(--cyan); }
 .msg.jarvis.done .txt::after { content: ""; }
+.msg.jarvis.done .txt { white-space: normal; }
+.msg .txt p { margin: 0 0 8px; }
+.msg .txt p:last-child { margin-bottom: 0; }
+.msg .txt ul { margin: 0 0 8px; padding-left: 18px; }
+.msg .txt ul:last-child { margin-bottom: 0; }
+.msg .txt strong { color: var(--cyan); }
+.msg.user .txt strong { color: var(--amber); }
 
 /* ---------- Talk button ---------- */
 .talk-wrap { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 14px; }
