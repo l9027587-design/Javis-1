@@ -158,6 +158,39 @@
     window.speechSynthesis.speak(utter);
   }
 
+  function stripMarkdown(text) {
+    return text
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/^\s*[-*]\s+/gm, "");
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function inlineFormat(line) {
+    return escapeHtml(line).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  }
+
+  // Small, safe subset of Markdown -- just what the assistant's system prompt is told
+  // to use (bold, short paragraphs, "- " lists) -- not a full parser.
+  function renderMarkdown(text) {
+    let html = "";
+    let inList = false;
+    for (const line of text.split("\n")) {
+      const bullet = line.match(/^\s*[-*]\s+(.+)/);
+      if (bullet) {
+        if (!inList) { html += "<ul>"; inList = true; }
+        html += `<li>${inlineFormat(bullet[1])}</li>`;
+        continue;
+      }
+      if (inList) { html += "</ul>"; inList = false; }
+      html += line.trim() ? `<p>${inlineFormat(line)}</p>` : "<br>";
+    }
+    if (inList) html += "</ul>";
+    return html;
+  }
+
   function addMessage(who, text, animate) {
     const wrap = document.createElement("div");
     wrap.className = `msg ${who}`;
@@ -179,7 +212,7 @@
       if (i <= text.length) {
         requestAnimationFrame(() => setTimeout(step, 12));
       } else {
-        txtEl.textContent = text;
+        txtEl.innerHTML = who === "jarvis" ? renderMarkdown(text) : escapeHtml(text);
         wrap.classList.add("done");
       }
     };
@@ -197,7 +230,7 @@
       });
       const data = await res.json();
       addMessage("jarvis", data.reply, true);
-      speak(data.reply);
+      speak(stripMarkdown(data.reply));
       state.history.push({ role: "assistant", content: data.reply });
     } catch (e) {
       addMessage("jarvis", "Die Verbindung zum Analyse-Kern wurde unterbrochen.", true);
