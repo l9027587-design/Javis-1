@@ -14,12 +14,14 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def init_db() -> None:
-    """Create all tables if they don't exist yet, and apply additive column migrations
-    that create_all() can't handle on tables that already existed before the column was
-    added (e.g. `results_synced_at` added to `players`)."""
+    """Create all tables if they don't exist yet, and apply simple column migrations that
+    create_all() can't handle on tables that already existed before the model changed."""
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE players ADD COLUMN IF NOT EXISTS results_synced_at TIMESTAMP"))
+        # Superseded by tour-level freshness tracking in sync_state (see ingest.py) once
+        # match-history backfill moved from a per-player API walk to a single per-tour
+        # dataset fetch -- drop the now-unused column from any DB it already reached.
+        conn.execute(text("ALTER TABLE players DROP COLUMN IF EXISTS results_synced_at"))
 
 
 @contextmanager

@@ -34,10 +34,6 @@ class Player(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )
-    # Set by ingest.sync_player_results after a successful past-matches fetch, so repeat
-    # ingestion runs can skip players already backfilled recently instead of re-spending
-    # a stats-API call on them every run (see RESULTS_FRESHNESS in ingest.py).
-    results_synced_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RankingHistory(Base):
