@@ -30,20 +30,29 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 
+_last_demo_reason: str | None = None
+
+
 def _live_matches() -> list[dict] | None:
     """Try the real pipeline (Postgres-backed). Returns None if unavailable/empty."""
+    global _last_demo_reason
     try:
         from src.llm.tools import get_upcoming_matches, get_match_prediction
 
         upcoming = get_upcoming_matches(days_ahead=4)
         if not upcoming:
+            _last_demo_reason = "DB reachable, but no scheduled matches found in the next 4 days"
             return None
         enriched = []
         for m in upcoming:
             pred = get_match_prediction(m["match_id"]) or {}
             enriched.append({**m, **pred, "demo": False})
+        _last_demo_reason = None
         return enriched
-    except Exception:  # noqa: BLE001 - DB/model not configured in this environment
+    except Exception as exc:  # noqa: BLE001 - DB/model not configured in this environment
+        # Surfaced via /api/status's debug_reason so this is checkable from a phone
+        # browser without digging through Render's log UI.
+        _last_demo_reason = f"{type(exc).__name__}: {exc}"
         logger.info("Live pipeline unavailable, falling back to demo data", exc_info=True)
         return None
 
@@ -65,6 +74,7 @@ def status() -> dict:
         "data_source": "Tipico (simulated feed)" if demo else f"Tipico via The Odds API (bookmakers={settings.odds_bookmakers or 'eu region'})",
         "assistant_ready": bool(settings.openai_api_key),
         "match_count": len(matches),
+        "debug_reason": _last_demo_reason if demo else None,
     }
 
 
