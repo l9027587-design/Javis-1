@@ -37,18 +37,14 @@ def _live_matches() -> list[dict] | None:
     """Try the real pipeline (Postgres-backed). Returns None if unavailable/empty."""
     global _last_demo_reason
     try:
-        from src.llm.tools import get_upcoming_matches, get_match_prediction
+        from src.llm.tools import get_matches_with_predictions
 
-        upcoming = get_upcoming_matches(days_ahead=4)
-        if not upcoming:
+        matches = get_matches_with_predictions(days_ahead=4)
+        if not matches:
             _last_demo_reason = "DB reachable, but no scheduled matches found in the next 4 days"
             return None
-        enriched = []
-        for m in upcoming:
-            pred = get_match_prediction(m["match_id"]) or {}
-            enriched.append({**m, **pred, "demo": False})
         _last_demo_reason = None
-        return enriched
+        return matches
     except Exception as exc:  # noqa: BLE001 - DB/model not configured in this environment
         # Surfaced via /api/status's debug_reason so this is checkable from a phone
         # browser without digging through Render's log UI.
