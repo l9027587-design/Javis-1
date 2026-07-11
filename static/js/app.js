@@ -259,12 +259,12 @@
     talkBtn.classList.toggle("listening", mode === "listening");
     talkBtn.classList.toggle("thinking", mode === "thinking");
     talkBtn.querySelector(".talk-label").textContent =
-      mode === "listening" ? "HÖRE ZU…" : mode === "thinking" ? "DENKE NACH…" : "SPRECHEN";
+      mode === "listening" ? "HÖRT ZU…" : mode === "thinking" ? "DENKT NACH…" : "J.A.R.V.I.S.";
   }
 
   if (!SpeechRecognitionCtor) {
     talkBtn.disabled = true;
-    talkBtn.querySelector(".talk-label").textContent = "SPRACHEINGABE NICHT VERFÜGBAR";
+    talkBtn.querySelector(".talk-label").textContent = "NICHT VERFÜGBAR";
   } else {
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = "de-DE";
