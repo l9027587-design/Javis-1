@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, aliased
 
 from src.config import settings
-from src.data_pipeline import balldontlie_client, sackmann_client
+from src.data_pipeline import sackmann_client
 from src.data_pipeline.api_client import TennisAPIClient
 from src.data_pipeline.odds_client import OddsAPIClient
 from src.db.models import Match, Odds, Player, SyncState
@@ -187,71 +187,6 @@ def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: st
     return count
 
 
-def sync_schedule_balldontlie(session: Session, tour: str, days_ahead: int = 3) -> int:
-    """Upcoming matches from BALLDONTLIE's ATP/WTA API (see balldontlie_client.py), used
-    instead of the metered stats API's per-date schedule calls when BALLDONTLIE_API_KEY is
-    set. Fetches the whole season in one call and filters down to the days-ahead window,
-    rather than one call per date."""
-    if not settings.balldontlie_api_key:
-        return 0
-    today = dt.date.today()
-    window_end = today + dt.timedelta(days=days_ahead)
-    try:
-        raw_matches = balldontlie_client.get_matches(tour, season=today.year)
-    except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
-        logger.warning("BALLDONTLIE schedule unavailable for tour=%s: %s", tour, exc)
-        return 0
-
-    count = 0
-    try:
-        for raw in raw_matches:
-            external_id = f"balldontlie:{tour}:{raw.get('id')}"
-            if raw.get("id") is None:
-                continue
-
-            start_raw = raw.get("date") or raw.get("start_date") or raw.get("scheduled") or raw.get("start_time")
-            if not start_raw:
-                continue
-            start = dt.datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
-            if not (today <= start.date() <= window_end):
-                continue
-
-            home = raw.get("player_1") or raw.get("home_player") or raw.get("player1") or {}
-            away = raw.get("player_2") or raw.get("away_player") or raw.get("player2") or {}
-
-            def _pname(p: dict) -> str:
-                return p.get("name") or p.get("full_name") if isinstance(p, dict) else (p or "TBD")
-
-            def _pid(p: dict, fallback: str) -> str:
-                return f"balldontlie:{p.get('id')}" if isinstance(p, dict) and p.get("id") is not None else fallback
-
-            p1 = _upsert_player(session, _pid(home, f"{external_id}-p1"), _pname(home) or "TBD", None, None)
-            p2 = _upsert_player(session, _pid(away, f"{external_id}-p2"), _pname(away) or "TBD", None, None)
-
-            match = session.scalar(select(Match).where(Match.external_id == external_id))
-            if match is None:
-                match = Match(external_id=external_id, player1_id=p1.id, player2_id=p2.id)
-                session.add(match)
-
-            tournament = raw.get("tournament") or {}
-            match.tournament_name = (
-                tournament.get("name") if isinstance(tournament, dict) else tournament
-            ) or "Unknown"
-            match.surface = tournament.get("surface") if isinstance(tournament, dict) else None
-            match.round = raw.get("round")
-            match.status = "scheduled"
-            match.start_time = start
-            match.player1_id = p1.id
-            match.player2_id = p2.id
-            session.flush()
-            count += 1
-    except (KeyError, AttributeError) as exc:
-        logger.warning("BALLDONTLIE schedule unparseable for tour=%s: %s", tour, exc)
-
-    logger.info("Synced %d matches for tour=%s (BALLDONTLIE)", count, tour)
-    return count
-
-
 def sync_player_results(session: Session, tour: str) -> int:
     """Backfill finished matches (with winner + score) from Jeff Sackmann's dataset.
 
@@ -371,12 +306,9 @@ def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
         today = dt.date.today()
         for tour in ("atp", "wta"):
             results["players"] += sync_rankings(session, tour=tour)
-            if settings.balldontlie_api_key:
-                results["matches"] += sync_schedule_balldontlie(session, tour=tour, days_ahead=days_ahead)
-            else:
-                for offset in range(days_ahead):
-                    date_str = (today + dt.timedelta(days=offset)).isoformat()
-                    results["matches"] += sync_schedule(session, client, date_str, tour=tour)
+            for offset in range(days_ahead):
+                date_str = (today + dt.timedelta(days=offset)).isoformat()
+                results["matches"] += sync_schedule(session, client, date_str, tour=tour)
             results["results"] += sync_player_results(session, tour=tour)
             results["odds"] += sync_odds(session, OddsAPIClient(tour_prefix=f"tennis_{tour}"))
     return results
