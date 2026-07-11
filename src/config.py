@@ -44,6 +44,12 @@ class Settings:
     tennis_api_key: str = _clean(os.getenv("TENNIS_API_KEY", ""))
     tennis_api_host: str = _clean(os.getenv("TENNIS_API_HOST", ""))
 
+    # BALLDONTLIE's ATP/WTA API (https://www.balldontlie.io/) -- used for the live
+    # upcoming schedule when set, since TENNIS_API_KEY's provider (RapidAPI Basic tier)
+    # has been unable to provide it (persistent daily quota exhaustion). Optional: the
+    # schedule sync just skips itself if this isn't configured.
+    balldontlie_api_key: str = _clean(os.getenv("BALLDONTLIE_API_KEY", ""))
+
     odds_api_key: str = _clean(os.getenv("ODDS_API_KEY", ""))
     # Bookmaker key(s) on The Odds API to pull odds from, comma-separated.
     # "tipico_de" is Tipico's feed on The Odds API — a documented, ToS-compliant
