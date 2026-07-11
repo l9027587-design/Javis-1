@@ -54,12 +54,18 @@
   <section class="panel chat-panel">
     <h2><span class="bracket">[</span> ASSISTANT <span class="bracket">]</span></h2>
     <div id="chat-log" class="chat-log">
-      <div class="msg jarvis"><span class="who">JARVIS</span><span class="txt">Systems online. Ask me about upcoming matches, a specific player, or say "best value bets".</span></div>
+      <div class="msg jarvis"><span class="who">JARVIS</span><span class="txt">Systeme online. Einfach den Knopf drücken und mit mir reden — frag mich nach kommenden Spielen, einem bestimmten Spieler, oder sag "beste Wetten".</span></div>
     </div>
-    <form id="chat-form" class="chat-form">
-      <input id="chat-input" type="text" autocomplete="off" placeholder="Ask JARVIS…" />
+    <div class="talk-wrap">
+      <button type="button" id="talk-btn" class="talk-btn">
+        <span class="talk-icon">🎙️</span>
+        <span class="talk-label">SPRECHEN</span>
+      </button>
+      <button type="button" id="voice-toggle" title="Sprachausgabe an/aus">🔊</button>
+    </div>
+    <form id="chat-form" class="chat-form chat-form-fallback">
+      <input id="chat-input" type="text" autocomplete="off" placeholder="…oder hier tippen" />
       <button type="submit">SEND</button>
-      <button type="button" id="voice-toggle" title="Toggle voice output">🔊</button>
     </form>
   </section>
 
