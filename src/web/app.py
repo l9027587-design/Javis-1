@@ -110,24 +110,26 @@ def chat(req: ChatRequest) -> dict:
 
 
 def _offline_reply(message: str) -> str:
-    """Rule-based JARVIS-voiced fallback so chat works with zero API keys configured."""
+    """Rule-based JARVIS-voiced fallback (German) so chat works with zero API keys configured."""
     data, _ = _matches_payload()
     text = message.lower()
 
     def fmt(m: dict) -> str:
+        favorite = m["pick"]
+        prob = max(m["player1_win_prob"], m["player2_win_prob"])
         return (
-            f"{m['player1']['name']} vs {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
-            f"model favors {m['pick']} at {max(m['player1_win_prob'], m['player2_win_prob']):.0%}, "
-            f"Tipico odds {m['tipico_player1_odds']:.2f} / {m['tipico_player2_odds']:.2f}, "
-            f"EV {m['expected_value']:+.1%}."
+            f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
+            f"ich sehe {favorite} vorn mit {prob:.0%}, Tipico-Quoten stehen bei "
+            f"{m['tipico_player1_odds']:.2f} / {m['tipico_player2_odds']:.2f}, "
+            f"das ergibt einen EV von {m['expected_value']:+.1%}."
         )
 
     if any(k in text for k in ("value", "bet", "wett", "edge", "empfeh")):
         picks = demo_data.best_value_bets(data, min_edge=0.05, limit=3)
         if not picks:
-            return "Scanning the board, sir — no bet currently clears my 5% edge threshold. Standing by."
+            return "Ich hab gerade nachgeschaut, aber nichts erreicht meine 5%-Edge-Schwelle. Ich bleibe dran."
         lines = "\n".join(f"- {fmt(m)}" for m in picks)
-        return f"Running the numbers now. Here is where I see an edge against Tipico's line:\n{lines}"
+        return f"Hab die Zahlen durchgerechnet — hier seh ich gerade einen Vorteil gegenüber Tipicos Quoten:\n{lines}"
 
     for m in data:
         for side in ("player1", "player2"):
@@ -136,9 +138,11 @@ def _offline_reply(message: str) -> str:
                 return fmt(m)
 
     upcoming = "\n".join(f"- {fmt(m)}" for m in data[:3])
+    demo_note = " (simulierte Daten)" if data and data[0].get("demo") else ""
     return (
-        "Good to see you. Here is a snapshot of the board" + (" (simulated data)" if data and data[0].get("demo") else "") + f":\n{upcoming}\n\n"
-        "Ask me about a specific player or say \"best value bets\" and I'll narrow it down."
+        f"Schön, dass du da bist. Hier ein kurzer Überblick{demo_note}:\n{upcoming}\n\n"
+        "Frag mich einfach nach einem bestimmten Spieler, oder sag \"beste Wetten\", "
+        "dann grenz ich das für dich ein."
     )
 
 
