@@ -26,6 +26,20 @@ RAW_BASE = {
 CONTENTS_API = "https://api.github.com/repos/JeffSackmann/tennis_{tour}/contents"
 
 
+def _raise_with_body(response: requests.Response) -> None:
+    """requests' default HTTPError message omits the response body, which for the GitHub
+    API usually explains *why* (e.g. rate limiting) far better than a bare status code."""
+    if response.ok:
+        return
+    rate_limit_remaining = response.headers.get("X-RateLimit-Remaining")
+    raise requests.HTTPError(
+        f"{response.status_code} for {response.url}"
+        f"{f' (X-RateLimit-Remaining={rate_limit_remaining})' if rate_limit_remaining is not None else ''}"
+        f": {response.text[:300]}",
+        response=response,
+    )
+
+
 @lru_cache(maxsize=4)
 def _repo_file_listing(tour: str) -> tuple[str, ...]:
     """All file names at the repo root, paginated (there are a few hundred)."""
@@ -38,7 +52,7 @@ def _repo_file_listing(tour: str) -> tuple[str, ...]:
             headers={"Accept": "application/vnd.github+json"},
             timeout=15,
         )
-        response.raise_for_status()
+        _raise_with_body(response)
         batch = response.json()
         if not batch:
             break
@@ -62,7 +76,7 @@ def _resolve_filename(tour: str, exact: str, prefix: str) -> str:
 def _fetch_csv(tour: str, filename: str) -> pd.DataFrame:
     url = f"{RAW_BASE[tour]}/{filename}"
     response = requests.get(url, timeout=30)
-    response.raise_for_status()
+    _raise_with_body(response)
     return pd.read_csv(StringIO(response.text), low_memory=False)
 
 
