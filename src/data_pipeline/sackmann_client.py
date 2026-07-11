@@ -88,7 +88,8 @@ def _resolve(tour: str, exact: str, prefix: str) -> str:
         matches = sorted(n for n in names if n.startswith(prefix))
         if matches:
             return names[matches[0]]
-        errors.append(f"{repo}: no file matching '{prefix}*' among {len(names)} files")
+        sample = ", ".join(sorted(names)[:15])
+        errors.append(f"{repo}: no file matching '{prefix}*' among {len(names)} files (sample: {sample})")
     raise FileNotFoundError(f"No source found for tour={tour} prefix='{prefix}': " + "; ".join(errors))
 
 
