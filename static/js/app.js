@@ -140,10 +140,19 @@
     if (!state.voiceOn || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "de-DE";
     utter.rate = 1.02;
     utter.pitch = 0.75;
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find((v) => /en-GB|male/i.test(v.name)) || voices[0];
+    const german = voices.filter((v) => v.lang.toLowerCase().startsWith("de"));
+    // Voice engines rarely label gender explicitly; known male German voice names
+    // (Google/Microsoft/Apple TTS) are matched first, then any other German voice,
+    // then whatever the browser offers as a fallback.
+    const preferred =
+      german.find((v) => /male|männlich|stefan|markus|yannick|daniel|conrad/i.test(v.name)) ||
+      german[0] ||
+      voices.find((v) => /male/i.test(v.name)) ||
+      voices[0];
     if (preferred) utter.voice = preferred;
     window.speechSynthesis.speak(utter);
   }
