@@ -108,8 +108,9 @@ def sync_rankings(session: Session, tour: str = "atp") -> int:
             points = None if pd.isna(row.points) else int(row.points)
             _upsert_player(session, f"sackmann:{row.player}", name, int(row.rank), points)
             count += 1
-    except (requests.RequestException, FileNotFoundError, KeyError, AttributeError) as exc:
-        # Network failure, a filename sackmann_client couldn't resolve, or the dataset's
+    except (requests.RequestException, FileNotFoundError, KeyError, AttributeError, ValueError) as exc:
+        # Network failure, a filename sackmann_client couldn't resolve, a column that
+        # doesn't parse as expected (e.g. non-numeric rank/points), or the dataset's
         # column layout doesn't match what this parses (its schema is a documented but
         # unversioned convention, not a contract) -- skip this tour's rankings for now
         # rather than aborting the whole ingestion run over it.
@@ -217,8 +218,11 @@ def sync_player_results(session: Session, tour: str) -> int:
                 continue
             external_id = f"sackmann:{tour}:{row.tourney_id}:{row.match_num}"
 
-            p1 = _upsert_player(session, f"sackmann:{int(row.winner_id)}", row.winner_name, None, None)
-            p2 = _upsert_player(session, f"sackmann:{int(row.loser_id)}", row.loser_name, None, None)
+            # Player IDs are just namespaced into an external_id string here, not used
+            # numerically -- don't assume they're integers (TML-Database's are
+            # alphanumeric, e.g. "B0BI", unlike Sackmann's plain integer IDs).
+            p1 = _upsert_player(session, f"sackmann:{row.winner_id}", row.winner_name, None, None)
+            p2 = _upsert_player(session, f"sackmann:{row.loser_id}", row.loser_name, None, None)
 
             match = session.scalar(select(Match).where(Match.external_id == external_id))
             if match is None:
@@ -236,7 +240,7 @@ def sync_player_results(session: Session, tour: str) -> int:
             match.player2_id = p2.id
             session.flush()
             count += 1
-    except (KeyError, AttributeError) as exc:
+    except (KeyError, AttributeError, ValueError) as exc:
         # Same rationale as sync_rankings: don't let an unparseable dataset column
         # abort the whole ingestion run -- keep whatever rows were synced before the
         # error and move on.
