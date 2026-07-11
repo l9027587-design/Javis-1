@@ -61,6 +61,62 @@ def get_match_prediction(match_id: int) -> dict | None:
         }
 
 
+def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
+    """Upcoming matches merged with each one's latest prediction, in a single DB session.
+
+    Used by the web app's /api/matches, which needs all of them at once -- calling
+    get_match_prediction() per match there opened one Postgres connection per match
+    (e.g. 24 for a full slate), which was slow/flaky enough against Neon's serverless
+    connection model to intermittently truncate the response mid-request.
+    """
+    now = dt.datetime.utcnow()
+    horizon = now + dt.timedelta(days=days_ahead)
+    with get_session() as session:
+        matches = session.scalars(
+            select(Match).where(Match.status == "scheduled", Match.start_time.between(now, horizon))
+        ).all()
+        if not matches:
+            return []
+        match_ids = [m.id for m in matches]
+        preds = session.scalars(
+            select(Prediction)
+            .where(Prediction.match_id.in_(match_ids))
+            .order_by(Prediction.match_id, Prediction.created_at.desc())
+        ).all()
+        latest_pred_by_match: dict[int, Prediction] = {}
+        for pred in preds:
+            latest_pred_by_match.setdefault(pred.match_id, pred)
+
+        results = []
+        for m in matches:
+            entry = {
+                "match_id": m.id,
+                "tournament": m.tournament_name,
+                "round": m.round,
+                "surface": m.surface,
+                "start_time": m.start_time.isoformat(),
+                "player1": m.player1.name,
+                "player2": m.player2.name,
+                "demo": False,
+            }
+            pred = latest_pred_by_match.get(m.id)
+            if pred is None:
+                entry["prediction"] = None
+            else:
+                entry.update(
+                    {
+                        "player1_win_prob": round(pred.player1_win_prob, 3),
+                        "player2_win_prob": round(1 - pred.player1_win_prob, 3),
+                        "best_player1_odds": pred.best_player1_odds,
+                        "best_player2_odds": pred.best_player2_odds,
+                        "expected_value": round(pred.expected_value, 3) if pred.expected_value is not None else None,
+                        "is_value_bet": pred.is_value_bet,
+                    }
+                )
+            results.append(entry)
+        return results
+
+
 def get_best_value_bets(days_ahead: int = 2, min_edge: float = 0.05, limit: int = 10) -> list[dict]:
     """Upcoming matches where the model's edge over the market (EV) is >= min_edge, sorted best-first."""
     now = dt.datetime.utcnow()
