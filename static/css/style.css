@@ -113,6 +113,13 @@ html, body {
 @media (max-width: 1000px) {
   .hud-grid { grid-template-columns: 1fr; }
 }
+@media (max-width: 640px) {
+  .hud-header { flex-wrap: wrap; padding: 14px 16px; gap: 10px 14px; }
+  .title-block { flex-basis: calc(100% - 84px); }
+  .title-block h1 { font-size: 20px; letter-spacing: 3px; }
+  .status-block { flex: 1 0 100%; text-align: left; }
+  .status-block .clock { font-size: 14px; }
+}
 
 .panel {
   background: linear-gradient(180deg, rgba(10,22,34,0.85), rgba(6,14,22,0.85));
