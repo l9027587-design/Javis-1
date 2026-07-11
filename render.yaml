@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: javis-tennis-ai
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.web.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        sync: false
+      - key: TENNIS_API_PROVIDER
+        sync: false
+      - key: TENNIS_API_KEY
+        sync: false
+      - key: TENNIS_API_HOST
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: ODDS_BOOKMAKERS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
