@@ -108,11 +108,11 @@ def sync_rankings(session: Session, tour: str = "atp") -> int:
             points = None if pd.isna(row.points) else int(row.points)
             _upsert_player(session, f"sackmann:{row.player}", name, int(row.rank), points)
             count += 1
-    except (requests.RequestException, KeyError, AttributeError) as exc:
-        # Network failure, or the dataset's column layout doesn't match what this
-        # parses (its schema is a documented but unversioned convention, not a
-        # contract) -- skip this tour's rankings for now rather than aborting the
-        # whole ingestion run over it.
+    except (requests.RequestException, FileNotFoundError, KeyError, AttributeError) as exc:
+        # Network failure, a filename sackmann_client couldn't resolve, or the dataset's
+        # column layout doesn't match what this parses (its schema is a documented but
+        # unversioned convention, not a contract) -- skip this tour's rankings for now
+        # rather than aborting the whole ingestion run over it.
         logger.warning("Sackmann rankings dataset unavailable/unparseable for tour=%s: %s", tour, exc)
         return 0
     _mark_synced(session, sync_key)
@@ -204,7 +204,7 @@ def sync_player_results(session: Session, tour: str) -> int:
     for year in (this_year, this_year - 1):
         try:
             frames.append(sackmann_client.get_matches(tour, year))
-        except requests.RequestException as exc:
+        except (requests.RequestException, FileNotFoundError) as exc:
             logger.warning("Sackmann matches dataset unavailable for tour=%s year=%d: %s", tour, year, exc)
     if not frames:
         return 0
