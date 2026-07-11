@@ -15,6 +15,7 @@
   const chatForm = el("#chat-form");
   const chatInput = el("#chat-input");
   const voiceToggle = el("#voice-toggle");
+  const talkBtn = el("#talk-btn");
 
   function tick() {
     const now = new Date();
@@ -199,7 +200,7 @@
       speak(data.reply);
       state.history.push({ role: "assistant", content: data.reply });
     } catch (e) {
-      addMessage("jarvis", "Connection to the analysis core was interrupted, sir.", true);
+      addMessage("jarvis", "Die Verbindung zum Analyse-Kern wurde unterbrochen.", true);
     }
   }
 
@@ -217,6 +218,59 @@
     voiceToggle.textContent = state.voiceOn ? "🔊" : "🔇";
     if (!state.voiceOn && "speechSynthesis" in window) window.speechSynthesis.cancel();
   });
+
+  // Press-to-talk: tap the button, speak, JARVIS answers out loud -- same idea as
+  // holding the power button for Bixby/Gemini, so no typing is needed day to day.
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function setTalkState(mode) {
+    talkBtn.classList.toggle("listening", mode === "listening");
+    talkBtn.classList.toggle("thinking", mode === "thinking");
+    talkBtn.querySelector(".talk-label").textContent =
+      mode === "listening" ? "HÖRE ZU…" : mode === "thinking" ? "DENKE NACH…" : "SPRECHEN";
+  }
+
+  if (!SpeechRecognitionCtor) {
+    talkBtn.disabled = true;
+    talkBtn.querySelector(".talk-label").textContent = "SPRACHEINGABE NICHT VERFÜGBAR";
+  } else {
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = "de-DE";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    let listening = false;
+
+    recognition.addEventListener("result", (e) => {
+      const transcript = e.results[0][0].transcript.trim();
+      if (transcript) {
+        setTalkState("thinking");
+        sendMessage(transcript).finally(() => setTalkState("idle"));
+      }
+    });
+    recognition.addEventListener("end", () => {
+      listening = false;
+      if (!talkBtn.classList.contains("thinking")) setTalkState("idle");
+    });
+    recognition.addEventListener("error", () => {
+      listening = false;
+      setTalkState("idle");
+    });
+
+    talkBtn.addEventListener("click", () => {
+      if (listening) {
+        recognition.stop();
+        return;
+      }
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      listening = true;
+      setTalkState("listening");
+      try {
+        recognition.start();
+      } catch (e) {
+        listening = false;
+        setTalkState("idle");
+      }
+    });
+  }
 
   loadStatus();
   loadMatches().then(loadTicker);
