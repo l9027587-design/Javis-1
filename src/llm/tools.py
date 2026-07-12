@@ -87,6 +87,10 @@ def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
         for pred in preds:
             latest_pred_by_match.setdefault(pred.match_id, pred)
 
+        # Field names/shape mirror demo_data.generate_matches() exactly (player1/player2 as
+        # {name, rank} objects, tipico_player1_odds/tipico_player2_odds, pick, is_value_bet)
+        # since the frontend was built against that shape -- keeping both sources identical
+        # means static/js/app.js doesn't need to know which one it's looking at.
         results = []
         for m in matches:
             entry = {
@@ -95,21 +99,23 @@ def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
                 "round": m.round,
                 "surface": m.surface,
                 "start_time": m.start_time.isoformat(),
-                "player1": m.player1.name,
-                "player2": m.player2.name,
+                "player1": {"name": m.player1.name, "rank": m.player1.current_rank},
+                "player2": {"name": m.player2.name, "rank": m.player2.current_rank},
                 "demo": False,
+                "has_prediction": False,
             }
             pred = latest_pred_by_match.get(m.id)
-            if pred is None:
-                entry["prediction"] = None
-            else:
+            if pred is not None:
+                favored_p1 = pred.player1_win_prob >= 0.5
                 entry.update(
                     {
+                        "has_prediction": True,
                         "player1_win_prob": round(pred.player1_win_prob, 3),
                         "player2_win_prob": round(1 - pred.player1_win_prob, 3),
-                        "best_player1_odds": pred.best_player1_odds,
-                        "best_player2_odds": pred.best_player2_odds,
+                        "tipico_player1_odds": pred.best_player1_odds,
+                        "tipico_player2_odds": pred.best_player2_odds,
                         "expected_value": round(pred.expected_value, 3) if pred.expected_value is not None else None,
+                        "pick": m.player1.name if favored_p1 else m.player2.name,
                         "is_value_bet": pred.is_value_bet,
                     }
                 )

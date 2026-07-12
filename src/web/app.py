@@ -121,6 +121,10 @@ def _offline_reply(message: str) -> str:
     text = message.lower()
 
     def fmt(m: dict) -> str:
+        # Live matches the model hasn't scored yet (has_prediction: False -- freshly
+        # ingested, no train-and-predict run over them) have no odds/EV to report.
+        if not m.get("has_prediction", True):
+            return f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m.get('round') or '?'}) — das Modell hat die noch nicht durchgerechnet, frag gleich nochmal."
         favorite = m["pick"]
         prob = max(m["player1_win_prob"], m["player2_win_prob"])
         return (

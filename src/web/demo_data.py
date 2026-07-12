@@ -102,6 +102,9 @@ def generate_matches(count: int = 6) -> list[dict]:
 
 
 def best_value_bets(matches: list[dict], min_edge: float = 0.05, limit: int = 5) -> list[dict]:
-    picks = [m for m in matches if m["expected_value"] >= min_edge]
+    """Also used against live matches (see app.py's _offline_reply), some of which may
+    not have a model prediction yet (has_prediction: False) -- skip those rather than
+    KeyError on the missing expected_value."""
+    picks = [m for m in matches if m.get("has_prediction", True) and m.get("expected_value", 0) >= min_edge]
     picks.sort(key=lambda m: m["expected_value"], reverse=True)
     return picks[:limit]
