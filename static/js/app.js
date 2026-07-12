@@ -26,6 +26,23 @@
 
   function pct(x) { return `${Math.round(x * 100)}%`; }
 
+  // Render's free tier spins the server down after inactivity, so the first request
+  // after a while can take 50+ seconds or briefly fail while it wakes up -- retry a
+  // few times with backoff instead of giving up on the first failed attempt.
+  async function fetchJsonWithRetry(url, { attempts = 4, delayMs = 3000, options } = {}) {
+    let lastError;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(url, options);
+        return await res.json();
+      } catch (e) {
+        lastError = e;
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+      }
+    }
+    throw lastError;
+  }
+
   function fmtTime(iso) {
     try {
       return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
@@ -55,7 +72,11 @@
         <div class="mc-top"><span>${m.tournament} · ${m.round}</span><span>${fmtTime(m.start_time)}</span></div>
         <div class="mc-players"><b>${m.player1.name}</b> vs <b>${m.player2.name}</b></div>
         <div class="mc-value">
-          ${m.is_value_bet ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>` : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
+          ${m.has_prediction === false
+            ? `<span style="color:var(--text-dim)">WIRD ANALYSIERT…</span>`
+            : m.is_value_bet
+              ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>`
+              : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
         </div>
       </div>
     `).join("");
@@ -67,6 +88,14 @@
   function renderDetail(m) {
     if (!m) {
       detailEl.innerHTML = '<div class="placeholder">Select a match to run the analysis.</div>';
+      return;
+    }
+    if (m.has_prediction === false) {
+      detailEl.innerHTML = `
+        <div class="detail-head"><span class="tourney">${m.tournament} — ${m.round || "?"} — ${m.surface || "?"}</span></div>
+        <div class="detail-players">${m.player1.name}<span class="vs">VS</span>${m.player2.name}</div>
+        <div class="placeholder">Noch keine Modell-Prognose für dieses Match — der nächste Trainingslauf holt das nach.</div>
+      `;
       return;
     }
     const p1 = m.player1, p2 = m.player2;
@@ -105,9 +134,9 @@
   }
 
   async function loadMatches() {
+    matchListEl.innerHTML = '<div class="loading">VERBINDE…</div>';
     try {
-      const res = await fetch("/api/matches");
-      const data = await res.json();
+      const data = await fetchJsonWithRetry("/api/matches");
       state.matches = data.matches || [];
       renderMatchList();
       if (state.matches.length && state.selectedId === null) {
