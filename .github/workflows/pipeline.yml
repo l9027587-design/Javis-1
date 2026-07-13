@@ -13,6 +13,11 @@ on:
           - ingest
           - train-and-predict
           - predict-only
+  schedule:
+    # Daily refresh so the upcoming-matches window doesn't go stale between manual
+    # runs -- ingest pulls the next few days of fixtures, then train+predict re-scores
+    # them, since "inputs.step" (used below) is only set for workflow_dispatch.
+    - cron: "0 6 * * *"
 
 jobs:
   run-step:
@@ -46,13 +51,13 @@ jobs:
         run: python -m scripts.init_db
 
       - name: ingest
-        if: inputs.step == 'ingest'
+        if: github.event_name == 'schedule' || inputs.step == 'ingest'
         run: python -m src.data_pipeline.ingest
 
       - name: train
-        if: inputs.step == 'train-and-predict'
+        if: github.event_name == 'schedule' || inputs.step == 'train-and-predict'
         run: python -m src.ml.train
 
       - name: predict
-        if: inputs.step == 'train-and-predict' || inputs.step == 'predict-only'
+        if: github.event_name == 'schedule' || inputs.step == 'train-and-predict' || inputs.step == 'predict-only'
         run: python -m src.ml.predict
