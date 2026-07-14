@@ -153,6 +153,20 @@ html, body {
   text-align: center;
 }
 
+.retry-btn {
+  margin-top: 14px;
+  padding: 8px 18px;
+  background: transparent;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.retry-btn:active { background: rgba(87,232,255,0.15); }
+
 /* ---------- Match list ---------- */
 .match-list { display: flex; flex-direction: column; gap: 10px; max-height: 520px; overflow-y: auto; }
 .match-card {
