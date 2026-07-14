@@ -30,6 +30,20 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 
+@app.middleware("http")
+async def no_cache_static_assets(request, call_next):
+    """Force revalidation for the frontend's own files (not the JSON API).
+
+    Without this, mobile browsers' heuristic caching can keep serving a stale
+    static/js/app.js for a while after a deploy ships a fix -- confusing during active
+    iteration, since the page looks like it didn't update at all.
+    """
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 _last_demo_reason: str | None = None
 
 
