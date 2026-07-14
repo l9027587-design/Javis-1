@@ -145,7 +145,12 @@
         selectMatch(state.matches[0].match_id);
       }
     } catch (e) {
-      matchListEl.innerHTML = '<div class="loading">CONNECTION LOST</div>';
+      // Render's free tier + a suspended Neon DB can occasionally take longer to wake
+      // than even the widened retry budget covers -- offer a one-tap manual retry
+      // instead of forcing a full page reload.
+      matchListEl.innerHTML = '<div class="loading">CONNECTION LOST<br><button id="retry-matches" class="retry-btn">NOCHMAL VERSUCHEN</button></div>';
+      const retryBtn = document.getElementById("retry-matches");
+      if (retryBtn) retryBtn.addEventListener("click", () => loadMatches().then(loadTicker));
     }
   }
 
