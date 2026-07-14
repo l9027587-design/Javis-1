@@ -26,10 +26,12 @@
 
   function pct(x) { return `${Math.round(x * 100)}%`; }
 
-  // Render's free tier spins the server down after inactivity, so the first request
-  // after a while can take 50+ seconds or briefly fail while it wakes up -- retry a
-  // few times with backoff instead of giving up on the first failed attempt.
-  async function fetchJsonWithRetry(url, { attempts = 4, delayMs = 3000, options } = {}) {
+  // Render's free tier spins the server down after inactivity, and the docs warn the
+  // first request after that can take "50 seconds or more" to wake it back up -- the
+  // earlier linear backoff (3+6+9s ~= 18s total) gave up well before that. Exponential
+  // backoff starting at 3s (3+6+12+24+48s ~= 93s total across 6 attempts) comfortably
+  // covers a worst-case cold start instead of giving up on the first failed attempt.
+  async function fetchJsonWithRetry(url, { attempts = 6, delayMs = 3000, options } = {}) {
     let lastError;
     for (let i = 0; i < attempts; i++) {
       try {
@@ -37,7 +39,7 @@
         return await res.json();
       } catch (e) {
         lastError = e;
-        if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs * Math.pow(2, i)));
       }
     }
     throw lastError;
