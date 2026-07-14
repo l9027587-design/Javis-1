@@ -140,6 +140,14 @@ def _offline_reply(message: str) -> str:
         if not m.get("has_prediction", True):
             return f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m.get('round') or '?'}) — das Modell hat die noch nicht durchgerechnet, frag gleich nochmal."
         favorite = m["pick"]
+        # has_prediction can be true with no Tipico odds yet (e.g. lower-tier matches
+        # the bookmaker feed doesn't cover) -- report the model's read without EV/odds.
+        if m.get("expected_value") is None:
+            prob = max(m["player1_win_prob"], m["player2_win_prob"])
+            return (
+                f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
+                f"ich seh {favorite} vorn mit {prob:.0%}, aber noch keine Tipico-Quote dafür, kann also kein EV ausrechnen."
+            )
         prob = max(m["player1_win_prob"], m["player2_win_prob"])
         return (
             f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
