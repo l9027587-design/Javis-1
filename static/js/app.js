@@ -76,9 +76,11 @@
         <div class="mc-value">
           ${m.has_prediction === false
             ? `<span style="color:var(--text-dim)">WIRD ANALYSIERT…</span>`
-            : m.is_value_bet
-              ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>`
-              : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
+            : m.expected_value == null
+              ? `<span style="color:var(--text-dim)">KEINE QUOTE</span>`
+              : m.is_value_bet
+                ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>`
+                : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
         </div>
       </div>
     `).join("");
@@ -119,6 +121,9 @@
         </div>
       </div>
 
+      ${m.expected_value == null
+        ? `<div class="placeholder">Für dieses Match liegt noch keine Tipico-Quote vor — sobald eine reinkommt, siehst du hier EV und Value-Bet-Check.</div>`
+        : `
       <div class="odds-grid">
         <div class="odds-box"><div class="label">TIPICO — ${p1.name.split(" ").pop()}</div><div class="val">${m.tipico_player1_odds.toFixed(2)}</div></div>
         <div class="odds-box"><div class="label">TIPICO — ${p2.name.split(" ").pop()}</div><div class="val">${m.tipico_player2_odds.toFixed(2)}</div></div>
@@ -126,6 +131,7 @@
       </div>
 
       ${m.is_value_bet ? `<div class="value-banner">VALUE BET DETECTED — model favors ${m.pick} beyond Tipico's price</div>` : ""}
+      `}
     `;
   }
 
