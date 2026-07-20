@@ -14,7 +14,7 @@ from typing import Any
 
 import pandas as pd
 import requests
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from src.config import settings
@@ -261,7 +261,11 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
     events = odds_client.get_odds_for_bookmakers(settings.odds_bookmakers) if settings.odds_bookmakers else []
     if not events:
         events = odds_client.get_odds()
+    logger.info("Fetched %d odds events for tour_prefix=%s", len(events), odds_client.tour_prefix)
+
     count = 0
+    unmatched_samples: list[tuple[str, str]] = []
+    Player1, Player2 = aliased(Player), aliased(Player)
     for event in events:
         home_name, away_name = event.get("home_team"), event.get("away_team")
         best = OddsAPIClient.best_prices(event)
@@ -269,20 +273,29 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
             continue
 
         home_last, away_last = home_name.split()[-1], away_name.split()[-1]
-        Player1, Player2 = aliased(Player), aliased(Player)
+        # Tennis has no real "home"/"away" side, so The Odds API's ordering isn't
+        # guaranteed to line up with which player we stored as player1 vs player2 --
+        # match either orientation instead of assuming home==player1.
         match = session.scalar(
             select(Match)
             .join(Player1, Match.player1_id == Player1.id)
             .join(Player2, Match.player2_id == Player2.id)
             .where(
-                Player1.name.ilike(f"%{home_last}%"), Player2.name.ilike(f"%{away_last}%")
+                or_(
+                    and_(Player1.name.ilike(f"%{home_last}%"), Player2.name.ilike(f"%{away_last}%")),
+                    and_(Player1.name.ilike(f"%{away_last}%"), Player2.name.ilike(f"%{home_last}%")),
+                )
             )
         )
         if match is None:
+            if len(unmatched_samples) < 5:
+                unmatched_samples.append((home_name, away_name))
             continue  # no matching row ingested from the stats API yet
 
-        bookmaker, p1_odds = best[home_name]
-        _, p2_odds = best[away_name]
+        home_is_p1 = home_last in match.player1.name
+        bookmaker, home_odds = best[home_name]
+        _, away_odds = best[away_name]
+        p1_odds, p2_odds = (home_odds, away_odds) if home_is_p1 else (away_odds, home_odds)
         session.add(
             Odds(
                 match_id=match.id,
@@ -292,6 +305,11 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
             )
         )
         count += 1
+    if count == 0 and events:
+        logger.warning(
+            "Odds events fetched but none matched existing matches; sample event pairings: %s",
+            unmatched_samples,
+        )
     logger.info("Recorded %d odds snapshots", count)
     return count
 
