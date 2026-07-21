@@ -251,6 +251,9 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
         home_odds, away_odds = (home_side_odds, away_side_odds) if home_is_stored_home else (away_side_odds, home_side_odds)
         draw_entry = best.get("Draw")
 
+        totals = OddsAPIClient.best_totals(event)
+        btts = OddsAPIClient.best_btts(event)
+
         session.add(
             Odds(
                 match_id=match.id,
@@ -258,6 +261,11 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
                 home_decimal_odds=home_odds,
                 draw_decimal_odds=draw_entry[1] if draw_entry else None,
                 away_decimal_odds=away_odds,
+                total_line=totals[1] if totals else None,
+                over_decimal_odds=totals[2] if totals else None,
+                under_decimal_odds=totals[3] if totals else None,
+                btts_yes_odds=btts[1] if btts else None,
+                btts_no_odds=btts[2] if btts else None,
             )
         )
         count += 1

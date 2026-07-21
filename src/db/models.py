@@ -63,9 +63,18 @@ class Odds(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
     bookmaker: Mapped[str] = mapped_column(String(64))
+    # 1X2 (match winner) market.
     home_decimal_odds: Mapped[float] = mapped_column(Float)
     draw_decimal_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
     away_decimal_odds: Mapped[float] = mapped_column(Float)
+    # Totals (Über/Unter) market -- one line (e.g. 2.5 goals) with over/under prices.
+    # Nullable as a whole: not every bookmaker/match has this market priced.
+    total_line: Mapped[float | None] = mapped_column(Float, nullable=True)
+    over_decimal_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    under_decimal_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Both Teams To Score (BTTS) market.
+    btts_yes_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    btts_no_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
 
 
