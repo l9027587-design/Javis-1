@@ -8,7 +8,7 @@ are the best bets today?") on top of it.
 
 ```
                  ┌────────────────────┐
-                 │  API-Sports.io      │  (fixtures, results, standings)
+                 │  football-data.org  │  (fixtures, results, standings)
                  │  + Odds API         │  (Tipico-filtered 1X2 odds)
                  └─────────┬──────────┘
                             │  scheduled HTTPS calls (daily)
@@ -51,11 +51,13 @@ of the LLM hallucinating stats, which matters a lot for anything bet-related.
 ## 2. Components
 
 ### 2.1 Data ingestion (`src/data_pipeline/`)
-- `football_client.py` — client for [API-Sports.io's Football API](https://api-sports.io/sports/football)
-  (fixtures, results, standings), authenticated via a single `x-apisports-key` header.
-  Free tier: 100 requests/day, every endpoint included — kept within budget by only
-  tracking a fixed list of major leagues (`DEFAULT_LEAGUE_IDS`) rather than every
-  league in existence.
+- `football_client.py` — client for [football-data.org's API](https://www.football-data.org/)
+  (fixtures, results, standings), authenticated via a single `X-Auth-Token` header.
+  Free tier: 10 requests/minute, current season included — API-Sports.io was tried
+  first, but its free tier only allows the 2022-2024 seasons, rejecting any request for
+  the current one. Tracks a fixed list of major leagues (`DEFAULT_LEAGUE_CODES`) rather
+  than every league in existence, both to stay within the rate limit and because that's
+  what the free tier covers anyway.
 - `odds_client.py` — client for [The Odds API](https://the-odds-api.com), a documented,
   inexpensive odds source with a stable REST contract. Unlike tennis (which keys odds
   per-tournament, ephemeral to that event's dates), football sport keys are stable,
@@ -157,7 +159,7 @@ pick — it's the single biggest cost lever in this stack.
 
 | Item | Estimate | Notes |
 |---|---|---|
-| Football stats API (API-Sports.io) | $0–20 | Free tier: 100 requests/day, every endpoint included — plenty for a handful of leagues polled daily; paid tiers only needed for higher-frequency or wider-league coverage |
+| Football stats API (football-data.org) | $0–15 | Free tier: 10 requests/min, current season, covers this app's leagues — plenty for a daily ingest run; paid tiers only needed for higher-frequency polling or extra leagues |
 | Odds API (The Odds API) | $0–59 | Free tier: 500 requests/mo; $59/mo tier covers frequent polling of a few sports |
 | Postgres (Neon/Supabase free–pro) | $0–25 | Free tier is enough for solo use; paid tier removes cold-starts/sleep |
 | Compute (GitHub Actions / Render free tier) | $0 | A daily scheduled run plus a low-traffic web service both fit comfortably in free-tier minutes |
@@ -175,10 +177,12 @@ Two things worth deciding up front because they drive cost the most:
 - Use official, documented APIs (as built here) rather than scraping bookmaker sites —
   scraping odds pages usually violates ToS and is fragile; the free/paid odds APIs
   exist specifically to be used programmatically.
-- `football_client.py`'s response-shape parsing follows API-Sports.io's documented
+- `football_client.py`'s response-shape parsing follows football-data.org's documented
   format rather than a live-tested payload, so `ingest.py` treats an unexpected shape
   the same as an unavailable source (skip + log) rather than crashing — check the logs
-  after the first real ingestion run and adjust field names there if needed.
+  after the first real ingestion run and adjust field names there if needed. This is
+  also how the API-Sports.io attempt was caught: its free tier turned out to reject any
+  request for the current season, discovered from exactly these logs.
 - This system produces *statistical* win probabilities and EV estimates for
   informational purposes — it is not gambling advice, odds can move after predictions
   are computed, and past performance doesn't guarantee results. Bet responsibly and
