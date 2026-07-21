@@ -28,6 +28,19 @@ def init_db() -> None:
             for old_table in ("match_stats", "ranking_history", "odds", "predictions", "matches", "players"):
                 conn.execute(text(f"DROP TABLE IF EXISTS {old_table} CASCADE"))
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        # Additive migration: totals (Über/Unter) and BTTS markets were added to an
+        # `odds` table that already existed on any DB that ran ingest before this --
+        # create_all() only creates missing tables, it won't add new columns to one
+        # that's already there.
+        for column, coltype in (
+            ("total_line", "DOUBLE PRECISION"),
+            ("over_decimal_odds", "DOUBLE PRECISION"),
+            ("under_decimal_odds", "DOUBLE PRECISION"),
+            ("btts_yes_odds", "DOUBLE PRECISION"),
+            ("btts_no_odds", "DOUBLE PRECISION"),
+        ):
+            conn.execute(text(f"ALTER TABLE odds ADD COLUMN IF NOT EXISTS {column} {coltype}"))
 
 
 @contextmanager

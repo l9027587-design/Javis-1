@@ -109,6 +109,21 @@ def value_bets(min_edge: float = 0.05, limit: int = 5) -> dict:
     return {"demo": demo, "value_bets": picks}
 
 
+@app.get("/api/combo-bets")
+def combo_bets(min_edge: float = 0.0, max_legs: int = 3) -> dict:
+    data, demo = _matches_payload()
+    if demo:
+        combos = demo_data.combo_suggestions(data, min_edge=min_edge, max_legs=max_legs)
+    else:
+        try:
+            from src.llm.tools import get_combo_suggestions
+
+            combos = get_combo_suggestions(min_edge=min_edge, max_legs=max_legs)
+        except Exception:  # noqa: BLE001
+            combos = []
+    return {"demo": demo, "combos": combos}
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] | None = None
@@ -131,7 +146,7 @@ def chat(req: ChatRequest) -> dict:
 
 def _offline_reply(message: str) -> str:
     """Rule-based JARVIS-voiced fallback (German) so chat works with zero API keys configured."""
-    data, _ = _matches_payload()
+    data, demo = _matches_payload()
     text = message.lower()
 
     def fmt(m: dict) -> str:
@@ -164,6 +179,28 @@ def _offline_reply(message: str) -> str:
             f"ich seh {favorite} vorn mit {best_prob:.0%}, mein Pick mit Kante ist **{m['value_pick']}** — "
             f"Tipico-Quoten (1/X/2): {m['home_odds']:.2f} / {draw_odds_str} / {m['away_odds']:.2f}, "
             f"das ergibt einen EV von {m['expected_value']:+.1%}."
+        )
+
+    if any(k in text for k in ("kombi", "combo", "parlay")):
+        if demo:
+            combos = demo_data.combo_suggestions(data, min_edge=0.0, max_legs=3)
+        else:
+            try:
+                from src.llm.tools import get_combo_suggestions
+
+                combos = get_combo_suggestions(min_edge=0.0, max_legs=3)
+            except Exception:  # noqa: BLE001
+                combos = []
+        if not combos:
+            return "Aktuell hab ich nicht genug Value-Picks für eine sinnvolle Kombi — frag nochmal, wenn mehr Spiele durchgerechnet sind."
+        best_combo = combos[-1]  # the largest combo, built from the same ranked picks as the smaller ones
+        legs_text = ", ".join(f"{leg['pick']} ({leg['odds']:.2f})" for leg in best_combo["legs"])
+        return (
+            f"Kombi-Vorschlag mit {len(best_combo['legs'])} Spielen: {legs_text} — "
+            f"kombinierte Quote **{best_combo['combined_odds']:.2f}**, "
+            f"kombinierte Trefferwahrscheinlichkeit {best_combo['combined_prob']:.0%}, "
+            f"EV {best_combo['combined_ev']:+.1%}. "
+            "Denk dran: bei Kombis multipliziert sich nicht nur die Quote, sondern auch das Risiko."
         )
 
     if any(k in text for k in ("value", "bet", "wett", "edge", "empfeh")):

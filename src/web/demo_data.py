@@ -67,6 +67,18 @@ def _tipico_odds(prob: float) -> float:
     return round(fair * TIPICO_MARGIN, 2)
 
 
+def _totals_odds(seed: str) -> tuple[float, float, float]:
+    """Deterministic Über/Unter 2.5-goals line with plausible odds."""
+    over_prob = min(0.75, max(0.35, 0.5 + (_seeded_fraction(seed, "totals") - 0.5) * 0.3))
+    return 2.5, _tipico_odds(over_prob), _tipico_odds(1 - over_prob)
+
+
+def _btts_odds(seed: str) -> tuple[float, float]:
+    """Deterministic BTTS (both teams to score) yes/no odds."""
+    yes_prob = min(0.75, max(0.35, 0.5 + (_seeded_fraction(seed, "btts") - 0.5) * 0.3))
+    return _tipico_odds(yes_prob), _tipico_odds(1 - yes_prob)
+
+
 def generate_matches(count: int = 6) -> list[dict]:
     now = dt.datetime.utcnow()
     matches = []
@@ -89,6 +101,8 @@ def generate_matches(count: int = 6) -> list[dict]:
         ]
         value_pick_key, edge = max(candidates, key=lambda c: c[1])
         pick_name = {"home": home_name, "draw": "Unentschieden", "away": away_name}[value_pick_key]
+        total_line, over_odds, under_odds = _totals_odds(seed)
+        btts_yes_odds, btts_no_odds = _btts_odds(seed)
 
         matches.append(
             {
@@ -105,8 +119,18 @@ def generate_matches(count: int = 6) -> list[dict]:
                 "home_odds": home_odds,
                 "draw_odds": draw_odds,
                 "away_odds": away_odds,
+                "totals": {"line": total_line, "over_odds": over_odds, "under_odds": under_odds},
+                "btts": {"yes_odds": btts_yes_odds, "no_odds": btts_no_odds},
                 "expected_value": edge,
+                # "pick" mirrors the live-data shape from tools.get_best_value_bets()
+                # (used by the ticker); "value_pick" is this module's own field name,
+                # used by the match-list/detail views -- kept both to satisfy each caller
+                # without reshaping data at the call site. "value_pick_side" is the raw
+                # home/draw/away key, used by combo_suggestions() to look up the right
+                # odds/probability without re-deriving it from the display name.
+                "pick": pick_name,
                 "value_pick": pick_name,
+                "value_pick_side": value_pick_key,
                 "is_value_bet": edge >= 0.05,
                 "has_prediction": True,
                 "demo": True,
@@ -130,3 +154,37 @@ def best_value_bets(matches: list[dict], min_edge: float = 0.05, limit: int = 5)
     ]
     picks.sort(key=lambda m: m["expected_value"], reverse=True)
     return picks[:limit]
+
+
+def combo_suggestions(matches: list[dict], min_edge: float = 0.0, max_legs: int = 3) -> list[dict]:
+    """Demo-mode mirror of tools.get_combo_suggestions() -- same combine-the-best-picks
+    logic, built from generate_matches()'s simulated data instead of Postgres."""
+    picks = best_value_bets(matches, min_edge=min_edge, limit=max_legs)
+    if len(picks) < 2:
+        return []
+
+    side_odds = {"home": "home_odds", "draw": "draw_odds", "away": "away_odds"}
+    side_prob = {"home": "home_win_prob", "draw": "draw_prob", "away": "away_win_prob"}
+
+    combos = []
+    for n in range(2, len(picks) + 1):
+        legs = picks[:n]
+        combined_odds = 1.0
+        combined_prob = 1.0
+        leg_entries = []
+        for leg in legs:
+            side = leg["value_pick_side"]
+            odds = leg[side_odds[side]]
+            prob = leg[side_prob[side]]
+            combined_odds *= odds
+            combined_prob *= prob
+            leg_entries.append({"match_id": leg["match_id"], "league": leg["league"], "pick": leg["pick"], "odds": odds})
+        combos.append(
+            {
+                "legs": leg_entries,
+                "combined_odds": round(combined_odds, 2),
+                "combined_prob": round(combined_prob, 3),
+                "combined_ev": round(combined_prob * combined_odds - 1, 3),
+            }
+        )
+    return combos

@@ -10,6 +10,7 @@
   const sourceLabel = el("#data-source-label");
   const matchListEl = el("#match-list");
   const detailEl = el("#match-detail");
+  const comboListEl = el("#combo-list");
   const tickerEl = el("#ticker");
   const chatLog = el("#chat-log");
   const chatForm = el("#chat-form");
@@ -139,6 +140,26 @@
 
       ${m.is_value_bet ? `<div class="value-banner">WERTWETTE ERKANNT — Modell sieht ${m.value_pick} im Vorteil gegenüber Tipicos Quote</div>` : ""}
       `}
+
+      ${(m.totals || m.btts) ? `
+      <div class="extra-markets">
+        ${m.totals ? `
+        <div class="market-row">
+          <div class="market-label">ÜBER/UNTER ${m.totals.line}</div>
+          <div class="odds-grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="odds-box"><div class="label">ÜBER</div><div class="val">${m.totals.over_odds.toFixed(2)}</div></div>
+            <div class="odds-box"><div class="label">UNTER</div><div class="val">${m.totals.under_odds.toFixed(2)}</div></div>
+          </div>
+        </div>` : ""}
+        ${m.btts ? `
+        <div class="market-row">
+          <div class="market-label">BEIDE TEAMS TREFFEN</div>
+          <div class="odds-grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="odds-box"><div class="label">JA</div><div class="val">${m.btts.yes_odds.toFixed(2)}</div></div>
+            <div class="odds-box"><div class="label">NEIN</div><div class="val">${m.btts.no_odds.toFixed(2)}</div></div>
+          </div>
+        </div>` : ""}
+      </div>` : ""}
     `;
   }
 
@@ -180,6 +201,30 @@
       tickerEl.innerHTML = `<span>${text}</span>`;
     } catch (e) {
       tickerEl.innerHTML = "<span>Ticker nicht erreichbar.</span>";
+    }
+  }
+
+  async function loadCombos() {
+    try {
+      const res = await fetch("/api/combo-bets");
+      const data = await res.json();
+      const combos = data.combos || [];
+      if (!combos.length) {
+        comboListEl.innerHTML = '<div class="loading">Aktuell keine sinnvolle Kombi aus den Value-Picks.</div>';
+        return;
+      }
+      comboListEl.innerHTML = combos.map((c) => `
+        <div class="combo-card">
+          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg">${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
+          <div class="combo-summary">
+            <span>Quote <b>${c.combined_odds.toFixed(2)}</b></span>
+            <span>Trefferchance ${(c.combined_prob * 100).toFixed(0)}%</span>
+            <span class="${c.combined_ev >= 0 ? "ev-positive" : "ev-negative"}">EV ${c.combined_ev >= 0 ? "+" : ""}${(c.combined_ev * 100).toFixed(1)}%</span>
+          </div>
+        </div>
+      `).join("");
+    } catch (e) {
+      comboListEl.innerHTML = '<div class="loading">Kombis gerade nicht erreichbar.</div>';
     }
   }
 
@@ -353,6 +398,8 @@
 
   loadStatus();
   loadMatches().then(loadTicker);
+  loadCombos();
   setInterval(loadStatus, 30000);
   setInterval(loadTicker, 45000);
+  setInterval(loadCombos, 60000);
 })();

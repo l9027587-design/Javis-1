@@ -10,7 +10,7 @@ import datetime as dt
 
 from sqlalchemy import select
 
-from src.db.models import Match, Prediction
+from src.db.models import Match, Odds, Prediction
 from src.db.session import get_session
 
 
@@ -95,6 +95,13 @@ def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
         for pred in preds:
             latest_pred_by_match.setdefault(pred.match_id, pred)
 
+        odds_rows = session.scalars(
+            select(Odds).where(Odds.match_id.in_(match_ids)).order_by(Odds.match_id, Odds.fetched_at.desc())
+        ).all()
+        latest_odds_by_match: dict[int, Odds] = {}
+        for odds in odds_rows:
+            latest_odds_by_match.setdefault(odds.match_id, odds)
+
         results = []
         for m in matches:
             entry = {
@@ -107,6 +114,15 @@ def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
                 "demo": False,
                 "has_prediction": False,
             }
+            odds = latest_odds_by_match.get(m.id)
+            if odds is not None and odds.total_line is not None:
+                entry["totals"] = {
+                    "line": odds.total_line,
+                    "over_odds": odds.over_decimal_odds,
+                    "under_odds": odds.under_decimal_odds,
+                }
+            if odds is not None and odds.btts_yes_odds is not None:
+                entry["btts"] = {"yes_odds": odds.btts_yes_odds, "no_odds": odds.btts_no_odds}
             pred = latest_pred_by_match.get(m.id)
             if pred is not None:
                 pick_name = {"home": m.home_team.name, "draw": "Unentschieden", "away": m.away_team.name}.get(
@@ -165,6 +181,39 @@ def get_best_value_bets(days_ahead: int = 3, min_edge: float = 0.05, limit: int 
         return results
 
 
+def get_combo_suggestions(days_ahead: int = 3, min_edge: float = 0.0, max_legs: int = 3) -> list[dict]:
+    """Suggested combo/accumulator bets (Kombiwetten), built by combining the best
+    individual 1X2 value picks and multiplying their odds/probabilities together --
+    the same simplification bookmakers' own combo-bet builders use, treating different
+    matches' outcomes as independent. Returns one combo per size from 2 legs up to
+    however many picks are available (max `max_legs`), each built from the same
+    ranked list of picks (so the 3-leg combo is the 2-leg combo plus one more match).
+    """
+    picks = get_best_value_bets(days_ahead=days_ahead, min_edge=min_edge, limit=max_legs)
+    if len(picks) < 2:
+        return []
+    combos = []
+    for n in range(2, len(picks) + 1):
+        legs = picks[:n]
+        combined_odds = 1.0
+        combined_prob = 1.0
+        for leg in legs:
+            combined_odds *= leg["best_odds"]
+            combined_prob *= leg["model_win_prob"]
+        combos.append(
+            {
+                "legs": [
+                    {"match_id": leg["match_id"], "league": leg["league"], "pick": leg["pick"], "odds": leg["best_odds"]}
+                    for leg in legs
+                ],
+                "combined_odds": round(combined_odds, 2),
+                "combined_prob": round(combined_prob, 3),
+                "combined_ev": round(combined_prob * combined_odds - 1, 3),
+            }
+        )
+    return combos
+
+
 # OpenAI function-calling tool schemas, paired with the callables above.
 TOOL_SCHEMAS = [
     {
@@ -205,10 +254,26 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_combo_suggestions",
+            "description": "Get suggested combo/accumulator bets (Kombiwetten), built by combining the best individual value picks across different matches and multiplying their odds. Assumes matches are independent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_ahead": {"type": "integer", "description": "default 3"},
+                    "min_edge": {"type": "number", "description": "minimum individual-leg EV to include, default 0.0"},
+                    "max_legs": {"type": "integer", "description": "max legs in the largest suggested combo, default 3"},
+                },
+            },
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
     "get_upcoming_matches": get_upcoming_matches,
     "get_match_prediction": get_match_prediction,
     "get_best_value_bets": get_best_value_bets,
+    "get_combo_suggestions": get_combo_suggestions,
 }
