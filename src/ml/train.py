@@ -24,14 +24,19 @@ MODEL_PATH = MODEL_DIR / "model.json"
 MODEL_VERSION = "xgb-1x2-v1"
 
 
-def train() -> dict[str, float]:
+def train() -> dict[str, float] | None:
     with get_session() as session:
         df = build_training_dataframe(session)
 
     if len(df) < 50:
-        raise RuntimeError(
-            f"Only {len(df)} training rows available; ingest more finished matches before training."
+        # Not an error worth hard-failing the daily scheduled run over -- e.g. during
+        # the European football off-season (roughly June-August), there simply aren't
+        # 50 finished matches to train on yet. Skip quietly; the next run picks up
+        # wherever the finished-match count landed once the season resumes.
+        logger.warning(
+            "Only %d training rows available (need >=50) -- skipping this run.", len(df)
         )
+        return None
 
     X, y = df[FEATURE_COLUMNS], df["label"]
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
