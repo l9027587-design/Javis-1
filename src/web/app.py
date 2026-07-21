@@ -124,6 +124,21 @@ def combo_bets(min_edge: float = 0.0, max_legs: int = 3) -> dict:
     return {"demo": demo, "combos": combos}
 
 
+@app.get("/api/combo-history")
+def combo_history(days_back: int = 14, limit: int = 20) -> dict:
+    try:
+        from src.llm.tools import get_combo_history
+
+        history = get_combo_history(days_back=days_back, limit=limit)
+        if history:
+            return {"demo": False, "history": history}
+    except Exception:  # noqa: BLE001
+        pass
+    # Empty (e.g. first days after deploy, before a combo has had time to settle) or
+    # unavailable both fall back to labeled demo data, same as the rest of the app.
+    return {"demo": True, "history": demo_data.combo_history()}
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] | None = None
@@ -180,6 +195,22 @@ def _offline_reply(message: str) -> str:
             f"Tipico-Quoten (1/X/2): {m['home_odds']:.2f} / {draw_odds_str} / {m['away_odds']:.2f}, "
             f"das ergibt einen EV von {m['expected_value']:+.1%}."
         )
+
+    if any(k in text for k in ("trefferquote", "historie", "bisher", "performance", "erfolgsquote")):
+        try:
+            from src.llm.tools import get_combo_history
+
+            history = get_combo_history(days_back=30, limit=30)
+        except Exception:  # noqa: BLE001
+            history = []
+        if not history:
+            history = demo_data.combo_history()
+        settled = [c for c in history if c["status"] in ("won", "lost")]
+        if not settled:
+            return "Noch keine abgeschlossenen Kombis, an denen ich das messen könnte — check nochmal, wenn ein paar Spieltage durch sind."
+        won = sum(1 for c in settled if c["status"] == "won")
+        sample_note = "Noch dünne Datenlage, sagt also noch nicht viel." if len(settled) < 10 else "Das ist schon eine brauchbare Stichprobe."
+        return f"Bisherige Bilanz: **{won} von {len(settled)}** Kombis aufgegangen ({won / len(settled):.0%}). {sample_note}"
 
     if any(k in text for k in ("kombi", "combo", "parlay")):
         if demo:

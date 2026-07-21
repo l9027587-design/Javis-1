@@ -11,6 +11,8 @@
   const matchListEl = el("#match-list");
   const detailEl = el("#match-detail");
   const comboListEl = el("#combo-list");
+  const comboHistoryListEl = el("#combo-history-list");
+  const comboHistoryStatsEl = el("#combo-history-stats");
   const tickerEl = el("#ticker");
   const chatLog = el("#chat-log");
   const chatForm = el("#chat-form");
@@ -228,6 +230,41 @@
     }
   }
 
+  async function loadComboHistory() {
+    try {
+      const res = await fetch("/api/combo-history");
+      const data = await res.json();
+      const history = data.history || [];
+      const demoNote = data.demo ? " (simuliert)" : "";
+      if (!history.length) {
+        comboHistoryStatsEl.textContent = `Trefferquote bisheriger Kombi-Vorschläge${demoNote}`;
+        comboHistoryListEl.innerHTML = '<div class="loading">Noch keine vergangenen Kombis — sobald die Saison läuft und Spiele abgeschlossen sind, siehst du hier die Bilanz.</div>';
+        return;
+      }
+      const settled = history.filter((c) => c.status === "won" || c.status === "lost");
+      const won = settled.filter((c) => c.status === "won").length;
+      comboHistoryStatsEl.textContent = settled.length
+        ? `${won} von ${settled.length} aufgegangen (${Math.round((won / settled.length) * 100)}%)${demoNote}`
+        : `Noch keine abgeschlossenen Kombis${demoNote}`;
+      comboHistoryListEl.innerHTML = history.map((c) => `
+        <div class="combo-card combo-history-card status-${c.status}">
+          <div class="combo-history-top">
+            <span class="combo-history-date">${fmtTime(c.created_at)}</span>
+            <span class="combo-status-tag status-${c.status}">${c.status === "won" ? "AUFGEGANGEN" : c.status === "lost" ? "NICHT AUFGEGANGEN" : "OFFEN"}</span>
+          </div>
+          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg leg-${leg.status}">${leg.status === "won" ? "✓" : leg.status === "lost" ? "✗" : "…"} ${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
+          <div class="combo-summary">
+            <span>Quote <b>${c.combined_odds.toFixed(2)}</b></span>
+            <span>Trefferchance ${(c.combined_prob * 100).toFixed(0)}%</span>
+            <span class="${c.combined_ev >= 0 ? "ev-positive" : "ev-negative"}">EV ${c.combined_ev >= 0 ? "+" : ""}${(c.combined_ev * 100).toFixed(1)}%</span>
+          </div>
+        </div>
+      `).join("");
+    } catch (e) {
+      comboHistoryListEl.innerHTML = '<div class="loading">Historie gerade nicht erreichbar.</div>';
+    }
+  }
+
   function speak(text) {
     if (!state.voiceOn || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
@@ -399,7 +436,9 @@
   loadStatus();
   loadMatches().then(loadTicker);
   loadCombos();
+  loadComboHistory();
   setInterval(loadStatus, 30000);
   setInterval(loadTicker, 45000);
   setInterval(loadCombos, 60000);
+  setInterval(loadComboHistory, 60000);
 })();

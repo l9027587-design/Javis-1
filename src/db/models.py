@@ -106,3 +106,39 @@ class Prediction(Base):
     value_pick: Mapped[str | None] = mapped_column(String(8), nullable=True)  # "home"|"draw"|"away"
     is_value_bet: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+
+
+class ComboBet(Base):
+    """One saved combo-bet suggestion (Kombiwette), generated once a day from that
+    day's best value picks -- kept around (unlike the live /api/combo-bets endpoint's
+    on-the-fly combos) so past suggestions can be checked against final results later,
+    to get a sense of how often the model's picks actually hit."""
+
+    __tablename__ = "combo_bets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    combined_odds: Mapped[float] = mapped_column(Float)
+    combined_prob: Mapped[float] = mapped_column(Float)
+    combined_ev: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|won|lost
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, index=True)
+    settled_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    legs: Mapped[list["ComboLeg"]] = relationship(back_populates="combo", cascade="all, delete-orphan")
+
+
+class ComboLeg(Base):
+    """One leg (one match's picked outcome) of a ComboBet."""
+
+    __tablename__ = "combo_legs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    combo_id: Mapped[int] = mapped_column(ForeignKey("combo_bets.id"), index=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"))
+    pick_side: Mapped[str] = mapped_column(String(8))  # "home"|"draw"|"away"
+    pick_name: Mapped[str] = mapped_column(String(128))
+    odds: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending|won|lost
+
+    combo: Mapped[ComboBet] = relationship(back_populates="legs")
+    match: Mapped[Match] = relationship()

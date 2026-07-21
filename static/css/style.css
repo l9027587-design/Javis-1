@@ -244,6 +244,18 @@ html, body {
 .combo-summary .ev-positive { color: var(--green); }
 .combo-summary .ev-negative { color: var(--red); }
 
+/* ---------- Combo history (vergangene Kombis) ---------- */
+.combo-history-card { position: relative; }
+.combo-history-card.status-won { border-color: rgba(77,255,178,0.45); background: rgba(77,255,178,0.05); }
+.combo-history-card.status-lost { border-color: rgba(255,77,94,0.4); background: rgba(255,77,94,0.05); }
+.combo-history-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.combo-history-date { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; }
+.combo-status-tag { font-size: 10px; letter-spacing: 1px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--panel-border); color: var(--text-dim); }
+.combo-status-tag.status-won { border-color: var(--green); color: var(--green); }
+.combo-status-tag.status-lost { border-color: var(--red); color: var(--red); }
+.combo-leg.leg-won { color: var(--green); }
+.combo-leg.leg-lost { color: var(--red); }
+
 /* ---------- Chat ---------- */
 .chat-log { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; margin-bottom: 12px; padding-right: 4px; }
 .msg { font-size: 13px; line-height: 1.5; }

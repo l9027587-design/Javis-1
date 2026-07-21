@@ -13,7 +13,7 @@ import logging
 import xgboost as xgb
 from sqlalchemy import select
 
-from src.db.models import Match, Odds, Prediction
+from src.db.models import ComboBet, ComboLeg, Match, Odds, Prediction
 from src.db.session import get_session
 from src.ml.features import build_features
 from src.ml.train import MODEL_DIR, MODEL_PATH, MODEL_VERSION
@@ -21,6 +21,8 @@ from src.ml.train import MODEL_DIR, MODEL_PATH, MODEL_VERSION
 logger = logging.getLogger(__name__)
 
 VALUE_BET_EV_THRESHOLD = 0.05  # flag bets with >5% edge over the market-implied probability
+COMBO_MAX_LEGS = 3
+COMBO_SAVE_FRESHNESS = dt.timedelta(hours=20)  # one saved combo per day, not one per run
 
 
 def load_model() -> tuple[xgb.XGBClassifier, list[str]]:
@@ -95,8 +97,66 @@ def run_daily_predictions(days_ahead: int = 7) -> int | None:
             )
             count += 1
 
+        save_daily_combo(session, days_ahead=days_ahead)
+
     logger.info("Wrote %d predictions", count)
     return count
+
+
+def save_daily_combo(session, days_ahead: int = 7, max_legs: int = COMBO_MAX_LEGS, min_edge: float = 0.0) -> ComboBet | None:
+    """Persist today's best combo suggestion (the single largest one, built from the
+    same ranked value picks as tools.get_combo_suggestions()'s smaller ones) so it can
+    be checked against final results later -- see settle_combo_bets() in ingest.py.
+    Skips if one was already saved within the last day.
+    """
+    cutoff = dt.datetime.utcnow() - COMBO_SAVE_FRESHNESS
+    if session.scalar(select(ComboBet).where(ComboBet.created_at >= cutoff)) is not None:
+        logger.info("Daily combo already saved within the last %s, skipping", COMBO_SAVE_FRESHNESS)
+        return None
+
+    now = dt.datetime.utcnow()
+    horizon = now + dt.timedelta(days=days_ahead)
+    rows = session.execute(
+        select(Prediction, Match)
+        .join(Match, Prediction.match_id == Match.id)
+        .where(
+            Match.start_time.between(now, horizon),
+            Prediction.expected_value.is_not(None),
+            Prediction.expected_value >= min_edge,
+            Prediction.value_pick.is_not(None),
+        )
+        .order_by(Prediction.expected_value.desc())
+        .limit(max_legs)
+    ).all()
+    if len(rows) < 2:
+        logger.info("Only %d value pick(s) available -- not enough for a combo today", len(rows))
+        return None
+
+    odds_field = {"home": "best_home_odds", "draw": "best_draw_odds", "away": "best_away_odds"}
+    prob_field = {"home": "home_win_prob", "draw": "draw_prob", "away": "away_win_prob"}
+
+    combo = ComboBet(combined_odds=1.0, combined_prob=1.0, combined_ev=0.0)
+    session.add(combo)
+    session.flush()  # assign combo.id for the legs' FK
+
+    combined_odds, combined_prob = 1.0, 1.0
+    for pred, match in rows:
+        side = pred.value_pick
+        odds = getattr(pred, odds_field[side])
+        prob = getattr(pred, prob_field[side])
+        pick_name = {"home": match.home_team.name, "draw": "Unentschieden", "away": match.away_team.name}[side]
+        combined_odds *= odds
+        combined_prob *= prob
+        session.add(ComboLeg(combo_id=combo.id, match_id=match.id, pick_side=side, pick_name=pick_name, odds=odds))
+
+    combo.combined_odds = round(combined_odds, 2)
+    combo.combined_prob = round(combined_prob, 3)
+    combo.combined_ev = round(combined_prob * combined_odds - 1, 3)
+    session.flush()
+    logger.info(
+        "Saved daily combo: %d legs, odds=%.2f, EV=%.1f%%", len(rows), combo.combined_odds, combo.combined_ev * 100
+    )
+    return combo
 
 
 if __name__ == "__main__":
