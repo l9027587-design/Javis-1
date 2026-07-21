@@ -13,9 +13,11 @@ key, so exact field names are a best-effort match -- ingest.py parses defensivel
 from __future__ import annotations
 
 import datetime as dt
+import time
 from typing import Any
 
 import requests
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.config import settings
 
@@ -32,12 +34,35 @@ DEFAULT_LEAGUE_CODES: dict[str, str] = {
     "CL": "UEFA Champions League",
 }
 
+# The free tier is 10 requests/minute; one ingest run makes 3 calls/league (schedule,
+# results, standings) across 6 leagues, well over that if fired back-to-back -- a
+# 6.5s minimum gap between requests (a bit over the 6.0s a strict 10/min budget would
+# allow) keeps a full run under the limit with some margin for network jitter.
+MIN_REQUEST_INTERVAL_SECONDS = 6.5
+_last_request_at: float = 0.0
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    return isinstance(exc, requests.HTTPError) and exc.response is not None and exc.response.status_code == 429
+
 
 def _headers() -> dict[str, str]:
     return {"X-Auth-Token": settings.football_api_key}
 
 
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=60),
+    retry=retry_if_exception(_is_rate_limited),
+)
 def _get(path: str, params: dict[str, Any] | None = None) -> dict:
+    global _last_request_at
+    elapsed = time.monotonic() - _last_request_at
+    if elapsed < MIN_REQUEST_INTERVAL_SECONDS:
+        time.sleep(MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+    _last_request_at = time.monotonic()
+
     response = requests.get(f"{BASE_URL}{path}", headers=_headers(), params=params or {}, timeout=15)
     if not response.ok:
         raise requests.HTTPError(
