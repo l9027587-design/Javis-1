@@ -36,8 +36,14 @@ def _latest_odds(session, match_id: int) -> Odds | None:
     return session.scalar(select(Odds).where(Odds.match_id == match_id).order_by(Odds.fetched_at.desc()).limit(1))
 
 
-def run_daily_predictions(days_ahead: int = 7) -> int:
-    model, feature_columns = load_model()
+def run_daily_predictions(days_ahead: int = 7) -> int | None:
+    try:
+        model, feature_columns = load_model()
+    except FileNotFoundError as exc:
+        # No model yet -- e.g. train() skipped this run for lack of data (off-season).
+        # Not worth hard-failing the daily scheduled run over.
+        logger.warning("Skipping predictions: %s", exc)
+        return None
     now = dt.datetime.utcnow()
     horizon = now + dt.timedelta(days=days_ahead)
 
