@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, aliased
 from src.config import settings
 from src.data_pipeline import football_client
 from src.data_pipeline.odds_client import OddsAPIClient
-from src.db.models import Match, Odds, SyncState, Team
+from src.db.models import ComboBet, ComboLeg, Match, Odds, SyncState, Team
 from src.db.session import get_session, init_db
 
 logger = logging.getLogger(__name__)
@@ -278,17 +278,53 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
     return count
 
 
+def settle_combo_bets(session: Session) -> int:
+    """Mark pending combo legs won/lost once their match has finished, and mark the
+    whole combo won/lost once every one of its legs is settled (a combo only wins if
+    every leg does -- same rule any bookmaker's combo bet uses)."""
+    pending_legs = session.scalars(select(ComboLeg).where(ComboLeg.status == "pending")).all()
+    touched_combo_ids: set[int] = set()
+    for leg in pending_legs:
+        match = leg.match
+        if match.status != "finished":
+            continue
+        if leg.pick_side == "home":
+            won = match.winner_team_id == match.home_team_id
+        elif leg.pick_side == "away":
+            won = match.winner_team_id == match.away_team_id
+        else:  # draw
+            won = match.winner_team_id is None
+        leg.status = "won" if won else "lost"
+        touched_combo_ids.add(leg.combo_id)
+
+    count = 0
+    for combo_id in touched_combo_ids:
+        combo = session.get(ComboBet, combo_id)
+        if combo is None or combo.status != "pending":
+            continue
+        leg_statuses = [leg.status for leg in combo.legs]
+        if any(status == "pending" for status in leg_statuses):
+            continue  # some legs' matches haven't been played yet
+        combo.status = "won" if all(status == "won" for status in leg_statuses) else "lost"
+        combo.settled_at = dt.datetime.utcnow()
+        count += 1
+    session.flush()
+    logger.info("Settled %d combo bets", count)
+    return count
+
+
 def run_ingestion(days_ahead: int = 7) -> dict[str, int]:
     """Full ingestion cycle across the configured leagues: schedule, results, standings, odds."""
     init_db()
 
-    results = {"matches": 0, "results": 0, "standings": 0, "odds": 0}
+    results = {"matches": 0, "results": 0, "standings": 0, "odds": 0, "combos_settled": 0}
     with get_session() as session:
         for league_code, league_name in football_client.DEFAULT_LEAGUE_CODES.items():
             results["matches"] += sync_schedule(session, league_code, league_name, days_ahead=days_ahead)
             results["results"] += sync_results(session, league_code, league_name)
             results["standings"] += sync_standings(session, league_code, league_name)
         results["odds"] += sync_odds(session, OddsAPIClient())
+        results["combos_settled"] += settle_combo_bets(session)
     return results
 
 

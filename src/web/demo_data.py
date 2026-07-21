@@ -188,3 +188,34 @@ def combo_suggestions(matches: list[dict], min_edge: float = 0.0, max_legs: int 
             }
         )
     return combos
+
+
+def combo_history(count: int = 5) -> list[dict]:
+    """Deterministic simulated past combo bets (a mix of won/lost) so the "vergangene
+    Kombis" panel isn't empty while SIMULATION MODE is active."""
+    now = dt.datetime.utcnow()
+    history = []
+    for i in range(count):
+        seed = f"combo-history-{i}"
+        n_legs = 2 + i % 2
+        legs = []
+        combined_odds = 1.0
+        for j in range(n_legs):
+            team_name, _ = TEAMS[(i * 3 + j * 2) % len(TEAMS)]
+            odds = round(1.5 + _seeded_fraction(seed, str(j)) * 2, 2)
+            combined_odds *= odds
+            hit = _seeded_fraction(seed, str(j), "hit") > 0.4
+            legs.append({"pick": team_name, "odds": odds, "status": "won" if hit else "lost"})
+        status = "won" if all(leg["status"] == "won" for leg in legs) else "lost"
+        history.append(
+            {
+                "id": 9000 + i,
+                "created_at": (now - dt.timedelta(days=i + 1)).isoformat() + "Z",
+                "status": status,
+                "combined_odds": round(combined_odds, 2),
+                "combined_prob": round(1 / combined_odds, 3),
+                "combined_ev": round((_seeded_fraction(seed, "ev") - 0.15) * 0.3, 3),
+                "legs": legs,
+            }
+        )
+    return history

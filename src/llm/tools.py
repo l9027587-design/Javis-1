@@ -10,7 +10,7 @@ import datetime as dt
 
 from sqlalchemy import select
 
-from src.db.models import Match, Odds, Prediction
+from src.db.models import ComboBet, Match, Odds, Prediction
 from src.db.session import get_session
 
 
@@ -214,6 +214,30 @@ def get_combo_suggestions(days_ahead: int = 3, min_edge: float = 0.0, max_legs: 
     return combos
 
 
+def get_combo_history(days_back: int = 14, limit: int = 20) -> list[dict]:
+    """Past saved combo-bet suggestions (Kombiwetten) and whether they hit, most recent
+    first -- one is saved per day by src.ml.predict.save_daily_combo(), and settled by
+    src.data_pipeline.ingest.settle_combo_bets() once every leg's match has finished.
+    """
+    cutoff = dt.datetime.utcnow() - dt.timedelta(days=days_back)
+    with get_session() as session:
+        combos = session.scalars(
+            select(ComboBet).where(ComboBet.created_at >= cutoff).order_by(ComboBet.created_at.desc()).limit(limit)
+        ).all()
+        return [
+            {
+                "id": c.id,
+                "created_at": c.created_at.isoformat(),
+                "status": c.status,
+                "combined_odds": round(c.combined_odds, 2),
+                "combined_prob": round(c.combined_prob, 3),
+                "combined_ev": round(c.combined_ev, 3),
+                "legs": [{"pick": leg.pick_name, "odds": round(leg.odds, 2), "status": leg.status} for leg in c.legs],
+            }
+            for c in combos
+        ]
+
+
 # OpenAI function-calling tool schemas, paired with the callables above.
 TOOL_SCHEMAS = [
     {
@@ -269,6 +293,20 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_combo_history",
+            "description": "Get past saved combo-bet suggestions and whether they won or lost, to answer questions about how often the model's picks have actually hit so far.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days_back": {"type": "integer", "description": "how many days back to look, default 14"},
+                    "limit": {"type": "integer", "description": "max results, default 20"},
+                },
+            },
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
@@ -276,4 +314,5 @@ TOOL_FUNCTIONS = {
     "get_match_prediction": get_match_prediction,
     "get_best_value_bets": get_best_value_bets,
     "get_combo_suggestions": get_combo_suggestions,
+    "get_combo_history": get_combo_history,
 }
