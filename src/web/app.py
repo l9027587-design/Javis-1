@@ -1,4 +1,4 @@
-"""FastAPI backend for the JARVIS-style tennis prediction HUD.
+"""FastAPI backend for the JARVIS-style football prediction HUD.
 
 Serves the static frontend (static/) and a small JSON API on top of the existing
 pipeline (src/llm/tools.py, src/ml/predict.py). If Postgres or an OpenAI key isn't
@@ -24,7 +24,7 @@ from src.web import demo_data
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JARVIS Tennis Prediction AI")
+app = FastAPI(title="JARVIS Football Prediction AI")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
@@ -53,9 +53,9 @@ def _live_matches() -> list[dict] | None:
     try:
         from src.llm.tools import get_matches_with_predictions
 
-        matches = get_matches_with_predictions(days_ahead=4)
+        matches = get_matches_with_predictions(days_ahead=7)
         if not matches:
-            _last_demo_reason = "DB reachable, but no scheduled matches found in the next 4 days"
+            _last_demo_reason = "DB reachable, but no scheduled matches found in the next 7 days"
             return None
         _last_demo_reason = None
         return matches
@@ -138,21 +138,31 @@ def _offline_reply(message: str) -> str:
         # Live matches the model hasn't scored yet (has_prediction: False -- freshly
         # ingested, no train-and-predict run over them) have no odds/EV to report.
         if not m.get("has_prediction", True):
-            return f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m.get('round') or '?'}) — das Modell hat die noch nicht durchgerechnet, frag gleich nochmal."
-        favorite = m["pick"]
+            return (
+                f"{m['home_team']['name']} gegen {m['away_team']['name']} ({m['league']}, {m.get('round') or '?'}) — "
+                "das Modell hat das noch nicht durchgerechnet, frag gleich nochmal."
+            )
+        home_pct, draw_pct, away_pct = m["home_win_prob"], m["draw_prob"], m["away_win_prob"]
+        best_prob = max(home_pct, draw_pct, away_pct)
+        if best_prob == home_pct:
+            favorite = m["home_team"]["name"]
+        elif best_prob == draw_pct:
+            favorite = "Unentschieden"
+        else:
+            favorite = m["away_team"]["name"]
+
         # has_prediction can be true with no Tipico odds yet (e.g. lower-tier matches
         # the bookmaker feed doesn't cover) -- report the model's read without EV/odds.
         if m.get("expected_value") is None:
-            prob = max(m["player1_win_prob"], m["player2_win_prob"])
             return (
-                f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
-                f"ich seh {favorite} vorn mit {prob:.0%}, aber noch keine Tipico-Quote dafür, kann also kein EV ausrechnen."
+                f"{m['home_team']['name']} gegen {m['away_team']['name']} ({m['league']}, {m.get('round') or '?'}) — "
+                f"ich seh {favorite} vorn mit {best_prob:.0%}, aber noch keine Tipico-Quote dafür, kann also kein EV ausrechnen."
             )
-        prob = max(m["player1_win_prob"], m["player2_win_prob"])
+        draw_odds_str = f"{m['draw_odds']:.2f}" if m.get("draw_odds") else "–"
         return (
-            f"{m['player1']['name']} gegen {m['player2']['name']} ({m['tournament']}, {m['round']}) — "
-            f"ich sehe {favorite} vorn mit {prob:.0%}, Tipico-Quoten stehen bei "
-            f"{m['tipico_player1_odds']:.2f} / {m['tipico_player2_odds']:.2f}, "
+            f"{m['home_team']['name']} gegen {m['away_team']['name']} ({m['league']}, {m.get('round') or '?'}) — "
+            f"ich seh {favorite} vorn mit {best_prob:.0%}, mein Pick mit Kante ist **{m['value_pick']}** — "
+            f"Tipico-Quoten (1/X/2): {m['home_odds']:.2f} / {draw_odds_str} / {m['away_odds']:.2f}, "
             f"das ergibt einen EV von {m['expected_value']:+.1%}."
         )
 
@@ -164,7 +174,7 @@ def _offline_reply(message: str) -> str:
         return f"Hab die Zahlen durchgerechnet — hier seh ich gerade einen Vorteil gegenüber Tipicos Quoten:\n{lines}"
 
     for m in data:
-        for side in ("player1", "player2"):
+        for side in ("home_team", "away_team"):
             name = m[side]["name"]
             if name.lower().split()[-1] in text:
                 return fmt(m)
@@ -173,7 +183,7 @@ def _offline_reply(message: str) -> str:
     demo_note = " (simulierte Daten)" if data and data[0].get("demo") else ""
     return (
         f"Schön, dass du da bist. Hier ein kurzer Überblick{demo_note}:\n{upcoming}\n\n"
-        "Frag mich einfach nach einem bestimmten Spieler, oder sag \"beste Wetten\", "
+        "Frag mich einfach nach einem bestimmten Team, oder sag \"beste Wetten\", "
         "dann grenz ich das für dich ein."
     )
 

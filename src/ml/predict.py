@@ -1,7 +1,8 @@
-"""Score upcoming matches and combine model probability with odds into an EV/value-bet call.
+"""Score upcoming matches and combine model probabilities with 1X2 odds into an EV call.
 
-expected_value = model_probability * best_decimal_odds - 1
-A positive EV means the model thinks the market is underpricing that player.
+expected_value = model_probability * best_decimal_odds - 1, computed separately for the
+home/draw/away outcomes; the highest of the three is stored as the match's overall EV.
+A positive EV means the model thinks the market is underpricing that outcome.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ def _latest_odds(session, match_id: int) -> Odds | None:
     return session.scalar(select(Odds).where(Odds.match_id == match_id).order_by(Odds.fetched_at.desc()).limit(1))
 
 
-def run_daily_predictions(days_ahead: int = 3) -> int:
+def run_daily_predictions(days_ahead: int = 7) -> int:
     model, feature_columns = load_model()
     now = dt.datetime.utcnow()
     horizon = now + dt.timedelta(days=days_ahead)
@@ -47,30 +48,42 @@ def run_daily_predictions(days_ahead: int = 3) -> int:
         ).all()
 
         for match in upcoming:
-            features = build_features(session, match.player1, match.player2, match.surface, now)
+            features = build_features(session, match.home_team, match.away_team, now)
             X = [[features[col] for col in feature_columns]]
-            prob_p1 = float(model.predict_proba(X)[0, 1])
+            # Label encoding from features.py: 0=away win, 1=draw, 2=home win.
+            away_prob, draw_prob, home_prob = model.predict_proba(X)[0]
 
             odds = _latest_odds(session, match.id)
-            best_p1_odds = odds.player1_decimal_odds if odds else None
-            best_p2_odds = odds.player2_decimal_odds if odds else None
+            best_home_odds = odds.home_decimal_odds if odds else None
+            best_draw_odds = odds.draw_decimal_odds if odds else None
+            best_away_odds = odds.away_decimal_odds if odds else None
 
-            ev = None
+            candidates: list[tuple[str, float]] = []
+            if best_home_odds:
+                candidates.append(("home", home_prob * best_home_odds - 1))
+            if best_draw_odds:
+                candidates.append(("draw", draw_prob * best_draw_odds - 1))
+            if best_away_odds:
+                candidates.append(("away", away_prob * best_away_odds - 1))
+
+            value_pick, ev = (None, None)
             is_value = False
-            if best_p1_odds and best_p2_odds:
-                ev_p1 = prob_p1 * best_p1_odds - 1
-                ev_p2 = (1 - prob_p1) * best_p2_odds - 1
-                ev = max(ev_p1, ev_p2)
+            if candidates:
+                value_pick, ev = max(candidates, key=lambda c: c[1])
                 is_value = ev >= VALUE_BET_EV_THRESHOLD
 
             session.add(
                 Prediction(
                     match_id=match.id,
                     model_version=MODEL_VERSION,
-                    player1_win_prob=prob_p1,
-                    best_player1_odds=best_p1_odds,
-                    best_player2_odds=best_p2_odds,
+                    home_win_prob=float(home_prob),
+                    draw_prob=float(draw_prob),
+                    away_win_prob=float(away_prob),
+                    best_home_odds=best_home_odds,
+                    best_draw_odds=best_draw_odds,
+                    best_away_odds=best_away_odds,
                     expected_value=ev,
+                    value_pick=value_pick,
                     is_value_bet=is_value,
                 )
             )

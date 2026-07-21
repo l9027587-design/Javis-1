@@ -1,37 +1,32 @@
-"""One ingestion cycle: rankings -> players, schedule -> matches, odds -> odds table.
+"""One ingestion cycle: fixtures -> matches, standings -> teams, odds -> odds table.
 
-Designed to be called repeatedly on a schedule (see cloud/lambda_ingest_handler.py).
-Each call is idempotent: players/matches are upserted by external_id, odds are
-appended as a new snapshot so line movement is preserved over time. Rankings and
-finished-match backfill come from Jeff Sackmann's free dataset (sackmann_client.py)
-rather than the metered live stats API, which is reserved for the upcoming schedule.
+Designed to be called repeatedly on a schedule (see .github/workflows/pipeline.yml).
+Each call is idempotent: teams/matches are upserted by external_id, odds are appended
+as a new snapshot so line movement is preserved over time. Fixtures/standings come from
+API-Sports.io's Football API (football_client.py); odds come from The Odds API.
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Any
 
-import pandas as pd
 import requests
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from src.config import settings
-from src.data_pipeline import sackmann_client
-from src.data_pipeline.api_client import TennisAPIClient
+from src.data_pipeline import football_client
 from src.data_pipeline.odds_client import OddsAPIClient
-from src.db.models import Match, Odds, Player, SyncState
+from src.db.models import Match, Odds, SyncState, Team
 from src.db.session import get_session, init_db
 
 logger = logging.getLogger(__name__)
 
-# Rankings and season match history (Sackmann dataset) barely change within a day, so
-# skip re-downloading/re-parsing them on every ingestion run within this window -- avoids
-# needless work now that they're free, though the live stats API's quota (spent on
-# sync_schedule) is the more important thing this used to protect.
-RANKINGS_FRESHNESS = dt.timedelta(hours=20)
+# Finished-match backfill and league standings barely change within a day, so skip
+# re-fetching them on every ingestion run within this window -- keeps the free-tier
+# 100-req/day API-Sports.io quota spent mostly on the upcoming schedule instead.
 RESULTS_FRESHNESS = dt.timedelta(hours=20)
+STANDINGS_FRESHNESS = dt.timedelta(hours=20)
 
 
 def _recently_synced(session: Session, key: str, freshness: dt.timedelta) -> bool:
@@ -48,211 +43,185 @@ def _mark_synced(session: Session, key: str) -> None:
     session.flush()
 
 
-def _upsert_player(session: Session, external_id: str, name: str, rank: int | None, points: int | None) -> Player:
-    player = session.scalar(select(Player).where(Player.external_id == external_id))
-    if player is None:
-        # The same real player can show up under a different external_id per source
-        # (e.g. Sackmann's dataset ID vs. the live schedule API's own numeric ID) --
-        # match by exact name to an existing row instead of creating a duplicate that
-        # would fragment rank/H2H data across two Player rows for one person.
-        player = session.scalar(select(Player).where(Player.name == name))
-    if player is None:
-        player = Player(external_id=external_id, name=name)
-        session.add(player)
-    player.name = name
-    # Callers that don't know rank/points (e.g. schedule sync, which only has names)
-    # pass None -- don't let that clobber values sync_rankings already set.
-    if rank is not None:
-        player.current_rank = rank
-    if points is not None:
-        player.current_points = points
+def _upsert_team(session: Session, external_id: str, name: str) -> Team:
+    team = session.scalar(select(Team).where(Team.external_id == external_id))
+    if team is None:
+        # The same real team can show up under a different external_id if a fixture's
+        # team block is ever missing an id -- match by exact name to an existing row
+        # instead of creating a duplicate that would fragment standings/H2H data.
+        team = session.scalar(select(Team).where(Team.name == name))
+    if team is None:
+        team = Team(external_id=external_id, name=name)
+        session.add(team)
+    team.name = name
     session.flush()
-    return player
+    return team
 
 
-def _extract_list(data: Any, *keys: str) -> list:
-    """Unwrap a list from a JSON envelope, trying known/likely container keys."""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in keys:
-            if isinstance(data.get(key), list):
-                return data[key]
-    return []
+def _current_season(today: dt.date) -> int:
+    """API-Sports.io's 'season' param is the season's start year (e.g. 2025 for the
+    2025-26 European season, which runs roughly August-May)."""
+    return today.year if today.month >= 7 else today.year - 1
 
 
-def sync_rankings(session: Session, tour: str = "atp") -> int:
-    """Rankings from Jeff Sackmann's free dataset (see sackmann_client.py) instead of the
-    metered live stats API -- ATP/WTA rankings only move weekly anyway, so a dataset with
-    a few days' lag costs nothing in accuracy and zero API quota. Returns count synced."""
-    sync_key = f"rankings:{tour}"
-    if _recently_synced(session, sync_key, RANKINGS_FRESHNESS):
-        logger.info("Rankings for tour=%s synced within the last %s, skipping", tour, RANKINGS_FRESHNESS)
-        return 0
+def sync_schedule(session: Session, league_id: int, league_name: str, days_ahead: int = 7) -> int:
+    """Fetch upcoming fixtures for one league and upsert them."""
     try:
-        players_df = sackmann_client.get_players(tour)
-        rankings_df = sackmann_client.get_current_rankings(tour)
-
-        latest_date = rankings_df["ranking_date"].max()
-        latest = rankings_df[rankings_df["ranking_date"] == latest_date]
-        players_by_id = players_df.set_index("player_id")
-
-        count = 0
-        for row in latest.itertuples():
-            if row.player not in players_by_id.index:
-                continue
-            info = players_by_id.loc[row.player]
-            name = f"{info.name_first} {info.name_last}".strip()
-            if not name or pd.isna(row.rank):
-                continue
-            points = None if pd.isna(row.points) else int(row.points)
-            _upsert_player(session, f"sackmann:{row.player}", name, int(row.rank), points)
-            count += 1
-    except (requests.RequestException, FileNotFoundError, KeyError, AttributeError, ValueError) as exc:
-        # Network failure, a filename sackmann_client couldn't resolve, a column that
-        # doesn't parse as expected (e.g. non-numeric rank/points), or the dataset's
-        # column layout doesn't match what this parses (its schema is a documented but
-        # unversioned convention, not a contract) -- skip this tour's rankings for now
-        # rather than aborting the whole ingestion run over it.
-        logger.warning("Sackmann rankings dataset unavailable/unparseable for tour=%s: %s", tour, exc)
+        raw_fixtures = football_client.get_upcoming_fixtures(league_id, _current_season(dt.date.today()), count=15)
+    except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
+        logger.warning("Football schedule unavailable for league=%s: %s", league_name, exc)
         return 0
-    _mark_synced(session, sync_key)
-    logger.info("Synced %d player rankings for tour=%s (Sackmann dataset)", count, tour)
-    return count
 
-
-def sync_schedule(session: Session, client: TennisAPIClient, date: str, tour: str = "atp") -> int:
-    """Fetch matches scheduled for `date` (YYYY-MM-DD) on one tour and upsert them."""
-    try:
-        data = client.get_schedule(date, tour=tour)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code in (403, 429):
-            # Some plans only expose fixtures within a limited days-ahead window (403),
-            # or the rate limit is still exhausted after _get's own retries (429); a
-            # single date shouldn't abort the whole ingestion run either way.
-            logger.warning(
-                "Schedule for tour=%s date=%s unavailable (HTTP %d), skipping",
-                tour, date, exc.response.status_code,
-            )
-            return 0
-        raise
-    raw_matches = _extract_list(data, "fixtures", "sport_events", "matches", "data", "results")
-    if not raw_matches:
-        logger.warning(
-            "No fixtures parsed for tour=%s date=%s; raw response keys/sample: %s",
-            tour,
-            date,
-            list(data.keys()) if isinstance(data, dict) else str(data)[:300],
-        )
+    today = dt.date.today()
+    window_end = today + dt.timedelta(days=days_ahead)
     count = 0
-    for raw in raw_matches:
-        external_id = str(raw.get("id") or raw.get("fixtureId") or raw.get("match_id") or "")
-        if not external_id or external_id == "None":
-            continue
-
-        competitors = raw.get("competitors") or raw.get("players")
-        home = competitors[0] if competitors else raw.get("player1") or raw.get("home") or {}
-        away = competitors[1] if competitors else raw.get("player2") or raw.get("away") or {}
-
-        def _player_id(p: dict, fallback: str) -> str:
-            return str(p.get("id") or p.get("playerId") or p.get("player_id") or fallback)
-
-        def _player_name(p: dict) -> str:
-            return p.get("name") or p.get("fullName") or p.get("full_name") or "TBD"
-
-        p1 = _upsert_player(session, _player_id(home, f"{external_id}-p1"), _player_name(home), None, None)
-        p2 = _upsert_player(session, _player_id(away, f"{external_id}-p2"), _player_name(away), None, None)
-
-        match = session.scalar(select(Match).where(Match.external_id == external_id))
-        if match is None:
-            match = Match(external_id=external_id, player1_id=p1.id, player2_id=p2.id)
-            session.add(match)
-
-        tournament = raw.get("tournament") or {}
-        match.tournament_name = (
-            tournament.get("name") if isinstance(tournament, dict) else None
-        ) or raw.get("tournament_name", "Unknown")
-        match.surface = raw.get("surface")
-        match.round = raw.get("round")
-        match.status = raw.get("status", "scheduled")
-        start = raw.get("start_time") or raw.get("scheduled") or raw.get("date")
-        match.start_time = (
-            dt.datetime.fromisoformat(start.replace("Z", "+00:00")) if start else dt.datetime.utcnow()
-        )
-        match.player1_id = p1.id
-        match.player2_id = p2.id
-        session.flush()
-        count += 1
-    logger.info("Synced %d matches for tour=%s date=%s", count, tour, date)
-    return count
-
-
-def sync_player_results(session: Session, tour: str) -> int:
-    """Backfill finished matches (with winner + score) from Jeff Sackmann's dataset.
-
-    Replaces the old per-player "past matches" API walk (~20 of ~28 stats-API calls per
-    ingestion run) with a single free CSV fetch covering the whole tour's season, so
-    src/ml/train.py gets far more training data at zero API cost. Pulls the current and
-    previous year's files so results near a season boundary aren't missed.
-    """
-    sync_key = f"results:{tour}"
-    if _recently_synced(session, sync_key, RESULTS_FRESHNESS):
-        logger.info("Results for tour=%s synced within the last %s, skipping", tour, RESULTS_FRESHNESS)
-        return 0
-
-    this_year = dt.date.today().year
-    frames = []
-    for year in (this_year, this_year - 1):
+    for raw in raw_fixtures:
         try:
-            frames.append(sackmann_client.get_matches(tour, year))
-        except (requests.RequestException, FileNotFoundError) as exc:
-            logger.warning("Sackmann matches dataset unavailable for tour=%s year=%d: %s", tour, year, exc)
-    if not frames:
-        return 0
-
-    count = 0
-    try:
-        matches_df = pd.concat(frames, ignore_index=True)
-        for row in matches_df.itertuples():
-            if pd.isna(row.winner_id) or pd.isna(row.loser_id) or pd.isna(row.tourney_date):
+            fixture = raw.get("fixture") or {}
+            fixture_id = fixture.get("id")
+            if fixture_id is None:
                 continue
-            external_id = f"sackmann:{tour}:{row.tourney_id}:{row.match_num}"
+            start_raw = fixture.get("date")
+            if not start_raw:
+                continue
+            start = dt.datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+            if not (today <= start.date() <= window_end):
+                continue
 
-            # Player IDs are just namespaced into an external_id string here, not used
-            # numerically -- don't assume they're integers (TML-Database's are
-            # alphanumeric, e.g. "B0BI", unlike Sackmann's plain integer IDs).
-            p1 = _upsert_player(session, f"sackmann:{row.winner_id}", row.winner_name, None, None)
-            p2 = _upsert_player(session, f"sackmann:{row.loser_id}", row.loser_name, None, None)
+            teams = raw.get("teams") or {}
+            home_raw, away_raw = teams.get("home") or {}, teams.get("away") or {}
+            if home_raw.get("id") is None or away_raw.get("id") is None:
+                continue
+            home = _upsert_team(session, f"apisports:{home_raw['id']}", home_raw.get("name") or "TBD")
+            away = _upsert_team(session, f"apisports:{away_raw['id']}", away_raw.get("name") or "TBD")
 
+            external_id = f"apisports:{fixture_id}"
             match = session.scalar(select(Match).where(Match.external_id == external_id))
             if match is None:
-                match = Match(external_id=external_id, player1_id=p1.id, player2_id=p2.id)
+                match = Match(external_id=external_id, home_team_id=home.id, away_team_id=away.id)
                 session.add(match)
 
-            match.tournament_name = row.tourney_name if isinstance(row.tourney_name, str) else "Unknown"
-            match.surface = row.surface if isinstance(row.surface, str) else None
-            match.round = row.round if isinstance(row.round, str) else None
-            match.status = "finished"
-            match.winner_id = p1.id
-            match.score = row.score if isinstance(row.score, str) else None
-            match.start_time = dt.datetime.strptime(str(int(row.tourney_date)), "%Y%m%d")
-            match.player1_id = p1.id
-            match.player2_id = p2.id
+            league = raw.get("league") or {}
+            match.league_name = league.get("name") or league_name
+            match.round = league.get("round")
+            match.status = "scheduled"
+            match.start_time = start
+            match.home_team_id = home.id
+            match.away_team_id = away.id
             session.flush()
             count += 1
-    except (KeyError, AttributeError, ValueError) as exc:
-        # Same rationale as sync_rankings: don't let an unparseable dataset column
-        # abort the whole ingestion run -- keep whatever rows were synced before the
-        # error and move on.
-        logger.warning("Sackmann matches dataset unparseable for tour=%s: %s", tour, exc)
+        except (KeyError, AttributeError, ValueError) as exc:
+            logger.warning("Football schedule fixture unparseable for league=%s: %s", league_name, exc)
+    logger.info("Synced %d upcoming fixtures for league=%s", count, league_name)
+    return count
+
+
+def sync_results(session: Session, league_id: int, league_name: str) -> int:
+    """Backfill finished fixtures (with score + winner) for one league, used as training data."""
+    sync_key = f"results:{league_id}"
+    if _recently_synced(session, sync_key, RESULTS_FRESHNESS):
+        logger.info("Results for league=%s synced within the last %s, skipping", league_name, RESULTS_FRESHNESS)
+        return 0
+
+    try:
+        raw_fixtures = football_client.get_recent_results(league_id, _current_season(dt.date.today()), count=60)
+    except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
+        logger.warning("Football results unavailable for league=%s: %s", league_name, exc)
+        return 0
+
+    count = 0
+    for raw in raw_fixtures:
+        try:
+            fixture = raw.get("fixture") or {}
+            fixture_id = fixture.get("id")
+            status = (fixture.get("status") or {}).get("short")
+            if fixture_id is None or status not in ("FT", "AET", "PEN"):
+                continue
+            start_raw = fixture.get("date")
+            if not start_raw:
+                continue
+            start = dt.datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+
+            teams = raw.get("teams") or {}
+            home_raw, away_raw = teams.get("home") or {}, teams.get("away") or {}
+            if home_raw.get("id") is None or away_raw.get("id") is None:
+                continue
+
+            goals = raw.get("goals") or {}
+            home_score, away_score = goals.get("home"), goals.get("away")
+            if home_score is None or away_score is None:
+                continue
+
+            home = _upsert_team(session, f"apisports:{home_raw['id']}", home_raw.get("name") or "TBD")
+            away = _upsert_team(session, f"apisports:{away_raw['id']}", away_raw.get("name") or "TBD")
+
+            external_id = f"apisports:{fixture_id}"
+            match = session.scalar(select(Match).where(Match.external_id == external_id))
+            if match is None:
+                match = Match(external_id=external_id, home_team_id=home.id, away_team_id=away.id)
+                session.add(match)
+
+            league = raw.get("league") or {}
+            match.league_name = league.get("name") or league_name
+            match.round = league.get("round")
+            match.status = "finished"
+            match.start_time = start
+            match.home_team_id = home.id
+            match.away_team_id = away.id
+            match.home_score = home_score
+            match.away_score = away_score
+            if home_score > away_score:
+                match.winner_team_id = home.id
+            elif away_score > home_score:
+                match.winner_team_id = away.id
+            else:
+                match.winner_team_id = None  # draw
+            session.flush()
+            count += 1
+        except (KeyError, AttributeError, ValueError) as exc:
+            logger.warning("Football result fixture unparseable for league=%s: %s", league_name, exc)
 
     _mark_synced(session, sync_key)
-    logger.info("Synced %d finished results for tour=%s (Sackmann dataset)", count, tour)
+    logger.info("Synced %d finished results for league=%s", count, league_name)
+    return count
+
+
+def sync_standings(session: Session, league_id: int, league_name: str) -> int:
+    """Update each team's current league position/points."""
+    sync_key = f"standings:{league_id}"
+    if _recently_synced(session, sync_key, STANDINGS_FRESHNESS):
+        logger.info("Standings for league=%s synced within the last %s, skipping", league_name, STANDINGS_FRESHNESS)
+        return 0
+
+    try:
+        raw = football_client.get_standings(league_id, _current_season(dt.date.today()))
+    except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
+        logger.warning("Standings unavailable for league=%s: %s", league_name, exc)
+        return 0
+
+    count = 0
+    try:
+        for league_block in raw:
+            groups = (league_block.get("league") or {}).get("standings") or []
+            for group in groups:
+                for entry in group:
+                    team_raw = entry.get("team") or {}
+                    if team_raw.get("id") is None:
+                        continue
+                    team = _upsert_team(session, f"apisports:{team_raw['id']}", team_raw.get("name") or "TBD")
+                    team.league_position = entry.get("rank")
+                    team.league_points = entry.get("points")
+                    count += 1
+    except (KeyError, AttributeError, ValueError) as exc:
+        logger.warning("Standings unparseable for league=%s: %s", league_name, exc)
+
+    _mark_synced(session, sync_key)
+    logger.info("Synced %d team standings for league=%s", count, league_name)
     return count
 
 
 def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
-    """Fetch current odds and record a snapshot per match found by fuzzy name match.
+    """Fetch current 1X2 odds and record a snapshot per match found by fuzzy name match.
 
     Prefers Tipico's feed (settings.odds_bookmakers, default "tipico_de") since that's
     the requested data source; falls back to the broader eu/uk/us region odds for
@@ -261,47 +230,52 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
     events = odds_client.get_odds_for_bookmakers(settings.odds_bookmakers) if settings.odds_bookmakers else []
     if not events:
         events = odds_client.get_odds()
-    logger.info("Fetched %d odds events for tour_prefix=%s", len(events), odds_client.tour_prefix)
+    logger.info("Fetched %d odds events", len(events))
 
     count = 0
     unmatched_samples: list[tuple[str, str]] = []
-    Player1, Player2 = aliased(Player), aliased(Player)
+    HomeTeam, AwayTeam = aliased(Team), aliased(Team)
     for event in events:
         home_name, away_name = event.get("home_team"), event.get("away_team")
+        if not home_name or not away_name:
+            continue
         best = OddsAPIClient.best_prices(event)
         if not best or home_name not in best or away_name not in best:
             continue
 
-        home_last, away_last = home_name.split()[-1], away_name.split()[-1]
-        # Tennis has no real "home"/"away" side, so The Odds API's ordering isn't
-        # guaranteed to line up with which player we stored as player1 vs player2 --
-        # match either orientation instead of assuming home==player1.
+        # Football has a real home/away side, but The Odds API's naming still might not
+        # line up exactly with whichever team we stored as home vs away for this fixture
+        # (e.g. a neutral-venue cup match) -- match either orientation, same rationale as
+        # the tennis version of this function had.
         match = session.scalar(
             select(Match)
-            .join(Player1, Match.player1_id == Player1.id)
-            .join(Player2, Match.player2_id == Player2.id)
+            .join(HomeTeam, Match.home_team_id == HomeTeam.id)
+            .join(AwayTeam, Match.away_team_id == AwayTeam.id)
             .where(
                 or_(
-                    and_(Player1.name.ilike(f"%{home_last}%"), Player2.name.ilike(f"%{away_last}%")),
-                    and_(Player1.name.ilike(f"%{away_last}%"), Player2.name.ilike(f"%{home_last}%")),
+                    and_(HomeTeam.name.ilike(f"%{home_name}%"), AwayTeam.name.ilike(f"%{away_name}%")),
+                    and_(HomeTeam.name.ilike(f"%{away_name}%"), AwayTeam.name.ilike(f"%{home_name}%")),
                 )
             )
         )
         if match is None:
             if len(unmatched_samples) < 5:
                 unmatched_samples.append((home_name, away_name))
-            continue  # no matching row ingested from the stats API yet
+            continue
 
-        home_is_p1 = home_last in match.player1.name
-        bookmaker, home_odds = best[home_name]
-        _, away_odds = best[away_name]
-        p1_odds, p2_odds = (home_odds, away_odds) if home_is_p1 else (away_odds, home_odds)
+        home_is_stored_home = home_name.lower() in match.home_team.name.lower() or match.home_team.name.lower() in home_name.lower()
+        bookmaker, home_side_odds = best[home_name]
+        _, away_side_odds = best[away_name]
+        home_odds, away_odds = (home_side_odds, away_side_odds) if home_is_stored_home else (away_side_odds, home_side_odds)
+        draw_entry = best.get("Draw")
+
         session.add(
             Odds(
                 match_id=match.id,
                 bookmaker=bookmaker,
-                player1_decimal_odds=p1_odds,
-                player2_decimal_odds=p2_odds,
+                home_decimal_odds=home_odds,
+                draw_decimal_odds=draw_entry[1] if draw_entry else None,
+                away_decimal_odds=away_odds,
             )
         )
         count += 1
@@ -314,21 +288,17 @@ def sync_odds(session: Session, odds_client: OddsAPIClient) -> int:
     return count
 
 
-def run_ingestion(days_ahead: int = 3) -> dict[str, int]:
-    """Full ingestion cycle: rankings, next `days_ahead` days of schedule, results, and odds."""
+def run_ingestion(days_ahead: int = 7) -> dict[str, int]:
+    """Full ingestion cycle across the configured leagues: schedule, results, standings, odds."""
     init_db()
-    client = TennisAPIClient()
 
-    results = {"players": 0, "matches": 0, "results": 0, "odds": 0}
+    results = {"matches": 0, "results": 0, "standings": 0, "odds": 0}
     with get_session() as session:
-        today = dt.date.today()
-        for tour in ("atp", "wta"):
-            results["players"] += sync_rankings(session, tour=tour)
-            for offset in range(days_ahead):
-                date_str = (today + dt.timedelta(days=offset)).isoformat()
-                results["matches"] += sync_schedule(session, client, date_str, tour=tour)
-            results["results"] += sync_player_results(session, tour=tour)
-            results["odds"] += sync_odds(session, OddsAPIClient(tour_prefix=f"tennis_{tour}"))
+        for league_id, league_name in football_client.DEFAULT_LEAGUE_IDS.items():
+            results["matches"] += sync_schedule(session, league_id, league_name, days_ahead=days_ahead)
+            results["results"] += sync_results(session, league_id, league_name)
+            results["standings"] += sync_standings(session, league_id, league_name)
+        results["odds"] += sync_odds(session, OddsAPIClient())
     return results
 
 

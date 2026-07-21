@@ -14,8 +14,8 @@ from src.db.models import Match, Prediction
 from src.db.session import get_session
 
 
-def get_upcoming_matches(days_ahead: int = 3) -> list[dict]:
-    """List scheduled matches in the next `days_ahead` days."""
+def get_upcoming_matches(days_ahead: int = 7) -> list[dict]:
+    """List scheduled football matches in the next `days_ahead` days."""
     now = dt.datetime.utcnow()
     horizon = now + dt.timedelta(days=days_ahead)
     with get_session() as session:
@@ -25,19 +25,18 @@ def get_upcoming_matches(days_ahead: int = 3) -> list[dict]:
         return [
             {
                 "match_id": m.id,
-                "tournament": m.tournament_name,
+                "league": m.league_name,
                 "round": m.round,
-                "surface": m.surface,
                 "start_time": m.start_time.isoformat(),
-                "player1": m.player1.name,
-                "player2": m.player2.name,
+                "home_team": m.home_team.name,
+                "away_team": m.away_team.name,
             }
             for m in matches
         ]
 
 
 def get_match_prediction(match_id: int) -> dict | None:
-    """Latest model prediction + odds/EV for a specific match."""
+    """Latest 1X2 model prediction + odds/EV for a specific match."""
     with get_session() as session:
         match = session.get(Match, match_id)
         if match is None:
@@ -46,28 +45,37 @@ def get_match_prediction(match_id: int) -> dict | None:
             select(Prediction).where(Prediction.match_id == match_id).order_by(Prediction.created_at.desc()).limit(1)
         )
         if pred is None:
-            return {"match_id": match_id, "player1": match.player1.name, "player2": match.player2.name, "prediction": None}
+            return {
+                "match_id": match_id,
+                "home_team": match.home_team.name,
+                "away_team": match.away_team.name,
+                "prediction": None,
+            }
         return {
             "match_id": match_id,
-            "tournament": match.tournament_name,
-            "player1": match.player1.name,
-            "player2": match.player2.name,
-            "player1_win_prob": round(pred.player1_win_prob, 3),
-            "player2_win_prob": round(1 - pred.player1_win_prob, 3),
-            "best_player1_odds": pred.best_player1_odds,
-            "best_player2_odds": pred.best_player2_odds,
+            "league": match.league_name,
+            "home_team": match.home_team.name,
+            "away_team": match.away_team.name,
+            "home_win_prob": round(pred.home_win_prob, 3),
+            "draw_prob": round(pred.draw_prob, 3),
+            "away_win_prob": round(pred.away_win_prob, 3),
+            "best_home_odds": pred.best_home_odds,
+            "best_draw_odds": pred.best_draw_odds,
+            "best_away_odds": pred.best_away_odds,
             "expected_value": round(pred.expected_value, 3) if pred.expected_value is not None else None,
+            "value_pick": pred.value_pick,
             "is_value_bet": pred.is_value_bet,
         }
 
 
-def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
+def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
     """Upcoming matches merged with each one's latest prediction, in a single DB session.
 
     Used by the web app's /api/matches, which needs all of them at once -- calling
-    get_match_prediction() per match there opened one Postgres connection per match
-    (e.g. 24 for a full slate), which was slow/flaky enough against Neon's serverless
-    connection model to intermittently truncate the response mid-request.
+    get_match_prediction() per match there would open one Postgres connection per
+    match, which is slow/flaky enough against Neon's serverless connection model to
+    intermittently truncate the response mid-request. One session for the whole batch
+    avoids that.
     """
     now = dt.datetime.utcnow()
     horizon = now + dt.timedelta(days=days_ahead)
@@ -87,35 +95,34 @@ def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
         for pred in preds:
             latest_pred_by_match.setdefault(pred.match_id, pred)
 
-        # Field names/shape mirror demo_data.generate_matches() exactly (player1/player2 as
-        # {name, rank} objects, tipico_player1_odds/tipico_player2_odds, pick, is_value_bet)
-        # since the frontend was built against that shape -- keeping both sources identical
-        # means static/js/app.js doesn't need to know which one it's looking at.
         results = []
         for m in matches:
             entry = {
                 "match_id": m.id,
-                "tournament": m.tournament_name,
+                "league": m.league_name,
                 "round": m.round,
-                "surface": m.surface,
                 "start_time": m.start_time.isoformat(),
-                "player1": {"name": m.player1.name, "rank": m.player1.current_rank},
-                "player2": {"name": m.player2.name, "rank": m.player2.current_rank},
+                "home_team": {"name": m.home_team.name, "position": m.home_team.league_position},
+                "away_team": {"name": m.away_team.name, "position": m.away_team.league_position},
                 "demo": False,
                 "has_prediction": False,
             }
             pred = latest_pred_by_match.get(m.id)
             if pred is not None:
-                favored_p1 = pred.player1_win_prob >= 0.5
+                pick_name = {"home": m.home_team.name, "draw": "Unentschieden", "away": m.away_team.name}.get(
+                    pred.value_pick
+                )
                 entry.update(
                     {
                         "has_prediction": True,
-                        "player1_win_prob": round(pred.player1_win_prob, 3),
-                        "player2_win_prob": round(1 - pred.player1_win_prob, 3),
-                        "tipico_player1_odds": pred.best_player1_odds,
-                        "tipico_player2_odds": pred.best_player2_odds,
+                        "home_win_prob": round(pred.home_win_prob, 3),
+                        "draw_prob": round(pred.draw_prob, 3),
+                        "away_win_prob": round(pred.away_win_prob, 3),
+                        "home_odds": pred.best_home_odds,
+                        "draw_odds": pred.best_draw_odds,
+                        "away_odds": pred.best_away_odds,
                         "expected_value": round(pred.expected_value, 3) if pred.expected_value is not None else None,
-                        "pick": m.player1.name if favored_p1 else m.player2.name,
+                        "value_pick": pick_name,
                         "is_value_bet": pred.is_value_bet,
                     }
                 )
@@ -123,7 +130,7 @@ def get_matches_with_predictions(days_ahead: int = 3) -> list[dict]:
         return results
 
 
-def get_best_value_bets(days_ahead: int = 2, min_edge: float = 0.05, limit: int = 10) -> list[dict]:
+def get_best_value_bets(days_ahead: int = 3, min_edge: float = 0.05, limit: int = 10) -> list[dict]:
     """Upcoming matches where the model's edge over the market (EV) is >= min_edge, sorted best-first."""
     now = dt.datetime.utcnow()
     horizon = now + dt.timedelta(days=days_ahead)
@@ -141,15 +148,17 @@ def get_best_value_bets(days_ahead: int = 2, min_edge: float = 0.05, limit: int 
         ).all()
         results = []
         for pred, match in rows:
-            favored_p1 = pred.player1_win_prob >= 0.5
+            pick_map = {"home": match.home_team.name, "draw": "Unentschieden", "away": match.away_team.name}
+            prob_map = {"home": pred.home_win_prob, "draw": pred.draw_prob, "away": pred.away_win_prob}
+            odds_map = {"home": pred.best_home_odds, "draw": pred.best_draw_odds, "away": pred.best_away_odds}
             results.append(
                 {
                     "match_id": match.id,
-                    "tournament": match.tournament_name,
+                    "league": match.league_name,
                     "start_time": match.start_time.isoformat(),
-                    "pick": match.player1.name if favored_p1 else match.player2.name,
-                    "model_win_prob": round(pred.player1_win_prob if favored_p1 else 1 - pred.player1_win_prob, 3),
-                    "best_odds": pred.best_player1_odds if favored_p1 else pred.best_player2_odds,
+                    "pick": pick_map.get(pred.value_pick),
+                    "model_win_prob": round(prob_map.get(pred.value_pick, 0.0), 3),
+                    "best_odds": odds_map.get(pred.value_pick),
                     "expected_value": round(pred.expected_value, 3),
                 }
             )
@@ -162,10 +171,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_upcoming_matches",
-            "description": "List upcoming scheduled tennis matches.",
+            "description": "List upcoming scheduled football matches.",
             "parameters": {
                 "type": "object",
-                "properties": {"days_ahead": {"type": "integer", "description": "How many days ahead to look, default 3"}},
+                "properties": {"days_ahead": {"type": "integer", "description": "How many days ahead to look, default 7"}},
             },
         },
     },
@@ -173,7 +182,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_match_prediction",
-            "description": "Get the model's win-probability prediction and odds/EV for one match by ID.",
+            "description": "Get the model's 1X2 (home/draw/away) win-probability prediction and odds/EV for one match by ID.",
             "parameters": {
                 "type": "object",
                 "properties": {"match_id": {"type": "integer"}},
@@ -189,7 +198,7 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "days_ahead": {"type": "integer", "description": "default 2"},
+                    "days_ahead": {"type": "integer", "description": "default 3"},
                     "min_edge": {"type": "number", "description": "minimum expected value to include, default 0.05"},
                     "limit": {"type": "integer", "description": "max results, default 10"},
                 },

@@ -8,7 +8,7 @@ from src.llm.assistant import ask
 
 
 def main() -> None:
-    print("Tennis betting assistant. Ask a question, or type 'quit'.")
+    print("Football betting assistant. Ask a question, or type 'quit'.")
     history: list[dict] = []
     while True:
         question = input("\n> ").strip()
