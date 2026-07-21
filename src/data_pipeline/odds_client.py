@@ -1,4 +1,4 @@
-"""Client for The Odds API (https://the-odds-api.com) — h2h (moneyline) tennis odds."""
+"""Client for The Odds API (https://the-odds-api.com) — 1X2 (home/draw/away) football odds."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,43 +10,38 @@ from src.config import settings
 
 BASE_URL = "https://api.the-odds-api.com/v4"
 
+# The Odds API keys football per competition, but unlike tennis these are stable,
+# enduring sport keys (leagues run for most of the year) rather than ephemeral
+# per-tournament ones -- no need to discover "currently in season" keys first, just
+# query this fixed list directly. Matches football_client.py's DEFAULT_LEAGUE_IDS.
+SPORT_KEYS = [
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_uefa_champs_league",
+]
+
 
 class OddsAPIClient:
-    def __init__(self, tour_prefix: str = "tennis_atp") -> None:
-        """tour_prefix: 'tennis_atp' or 'tennis_wta'.
-
-        The Odds API has no single blanket sport_key covering "all ATP" or "all WTA"
-        matches at once — tennis is keyed per tournament (e.g. 'tennis_atp_wimbledon',
-        'tennis_atp_french_open'), and a given key only exists while that tournament is
-        actually in season. So every call first lists currently in-season sports and
-        queries each tournament key that starts with this prefix.
-        """
-        self.tour_prefix = tour_prefix
+    def __init__(self) -> None:
         self.session = requests.Session()
-
-    @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    def _active_tournament_keys(self) -> list[str]:
-        """Sport keys for currently in-season tournaments matching self.tour_prefix."""
-        response = self.session.get(
-            f"{BASE_URL}/sports", params={"apiKey": settings.odds_api_key}, timeout=15
-        )
-        response.raise_for_status()
-        return [s["key"] for s in response.json() if s.get("key", "").startswith(self.tour_prefix)]
 
     @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
     def _get_odds_for_sport(self, sport_key: str, params: dict[str, str]) -> list[dict[str, Any]]:
         url = f"{BASE_URL}/sports/{sport_key}/odds"
-        response = self.session.get(
-            url, params={**params, "apiKey": settings.odds_api_key}, timeout=15
-        )
+        response = self.session.get(url, params={**params, "apiKey": settings.odds_api_key}, timeout=15)
+        if response.status_code == 404:
+            return []  # this league isn't "in season" right now (e.g. summer break)
         response.raise_for_status()
         return response.json()
 
     def get_odds(self, regions: str = "eu,uk,us", markets: str = "h2h") -> list[dict[str, Any]]:
-        """Returns bookmaker h2h (moneyline) odds for every in-season tournament in this tour."""
+        """Returns bookmaker h2h (1X2) odds for every configured league."""
         params = {"regions": regions, "markets": markets, "oddsFormat": "decimal"}
         events: list[dict[str, Any]] = []
-        for sport_key in self._active_tournament_keys():
+        for sport_key in SPORT_KEYS:
             events.extend(self._get_odds_for_sport(sport_key, params))
         return events
 
@@ -60,13 +55,17 @@ class OddsAPIClient:
         """
         params = {"bookmakers": bookmakers, "markets": markets, "oddsFormat": "decimal"}
         events: list[dict[str, Any]] = []
-        for sport_key in self._active_tournament_keys():
+        for sport_key in SPORT_KEYS:
             events.extend(self._get_odds_for_sport(sport_key, params))
         return events
 
     @staticmethod
     def best_prices(event: dict[str, Any]) -> dict[str, tuple[str, float]] | None:
-        """Given one event payload, return {player_name: (bookmaker, best_decimal_odds)}."""
+        """Given one event payload, return {outcome_name: (bookmaker, best_decimal_odds)}.
+
+        For football's h2h market, outcome names are the two team names plus the
+        literal string "Draw" -- unlike tennis, which only ever has two outcomes.
+        """
         best: dict[str, tuple[str, float]] = {}
         for bookmaker in event.get("bookmakers", []):
             for market in bookmaker.get("markets", []):

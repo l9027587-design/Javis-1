@@ -40,9 +40,9 @@ class Settings:
     # `os.getenv(name) or default` (not the two-arg form) is deliberate: GitHub Actions
     # sets a referenced-but-undefined `vars.X` to an empty string rather than leaving it
     # unset, which would silently defeat a `os.getenv(name, default)` fallback.
-    tennis_api_provider: str = _clean(os.getenv("TENNIS_API_PROVIDER") or "rapidapi")
-    tennis_api_key: str = _clean(os.getenv("TENNIS_API_KEY", ""))
-    tennis_api_host: str = _clean(os.getenv("TENNIS_API_HOST", ""))
+    # API-Sports.io's Football API (https://api-sports.io/sports/football) -- fixtures,
+    # results, and standings. Auth is a single header, no separate host/provider needed.
+    football_api_key: str = _clean(os.getenv("FOOTBALL_API_KEY", ""))
 
     odds_api_key: str = _clean(os.getenv("ODDS_API_KEY", ""))
     # Bookmaker key(s) on The Odds API to pull odds from, comma-separated.
@@ -52,7 +52,7 @@ class Settings:
     odds_bookmakers: str = _clean(os.getenv("ODDS_BOOKMAKERS") or "tipico_de")
 
     database_url: str = _normalize_database_url(
-        os.getenv("DATABASE_URL") or "postgresql+psycopg2://user:password@localhost:5432/tennis"
+        os.getenv("DATABASE_URL") or "postgresql+psycopg2://user:password@localhost:5432/football"
     )
 
     openai_api_key: str = _clean(os.getenv("OPENAI_API_KEY", ""))

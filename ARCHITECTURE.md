@@ -1,35 +1,36 @@
-# Tennis Prediction & Betting-Insight System — Architecture
+# Football Prediction & Betting-Insight System — Architecture
 
-A Python system that continuously ingests tennis data, trains an XGBoost win-probability
-model, and exposes an LLM chat layer ("what are the best bets today?") on top of it.
+A Python system that continuously ingests football (soccer) fixture data, trains an
+XGBoost 1X2 (home win / draw / away win) model, and exposes an LLM chat layer ("what
+are the best bets today?") on top of it.
 
 ## 1. High-level flow
 
 ```
                  ┌────────────────────┐
-                 │  Tennis data APIs  │  (Sportradar / RapidAPI: rankings,
-                 │  + Odds API        │   schedule, match stats, H2H, odds)
+                 │  API-Sports.io      │  (fixtures, results, standings)
+                 │  + Odds API         │  (Tipico-filtered 1X2 odds)
                  └─────────┬──────────┘
-                            │  scheduled HTTPS calls (every 15–60 min)
+                            │  scheduled HTTPS calls (daily)
                             ▼
                  ┌────────────────────┐
                  │  Ingestion job      │  src/data_pipeline/*
-                 │  (Lambda / Cloud    │  - normalizes payloads
-                 │   Function, cron)   │  - upserts into Postgres
+                 │  (GitHub Actions,   │  - normalizes payloads
+                 │   cron)             │  - upserts into Postgres
                  └─────────┬──────────┘
                             ▼
                  ┌────────────────────┐
-                 │ Managed Postgres    │  players, rankings_history, matches,
-                 │ (Neon / RDS /       │  match_stats, odds, predictions
+                 │ Managed Postgres    │  teams, matches, odds, predictions
+                 │ (Neon / RDS /       │
                  │  Cloud SQL)         │
                  └─────────┬──────────┘
               ┌────────────┼─────────────────┐
               ▼                              ▼
   ┌────────────────────┐          ┌────────────────────────┐
-  │ Training job         │  weekly │ Prediction job          │  daily/hourly
+  │ Training job         │  daily  │ Prediction job          │  daily
   │ src/ml/train.py      │────────▶│ src/ml/predict.py        │
-  │ → XGBoost model.json │  model  │ → win-prob + EV vs odds  │
-  │ stored in S3/GCS      │ artifact│ → writes `predictions`   │
+  │ → XGBoost model.json │  model  │ → 1X2 probs + EV vs odds │
+  │ stored in models/    │ artifact│ → writes `predictions`   │
   └────────────────────┘          └───────────┬────────────┘
                                                 ▼
                                    ┌────────────────────────┐
@@ -50,46 +51,54 @@ of the LLM hallucinating stats, which matters a lot for anything bet-related.
 ## 2. Components
 
 ### 2.1 Data ingestion (`src/data_pipeline/`)
-- `api_client.py` — generic, retrying HTTP client for the tennis stats provider
-  (Sportradar Tennis API or a RapidAPI tennis provider). Endpoint paths are kept in a
-  config dict because they differ by provider/plan — point it at whichever API you
-  subscribe to.
+- `football_client.py` — client for [API-Sports.io's Football API](https://api-sports.io/sports/football)
+  (fixtures, results, standings), authenticated via a single `x-apisports-key` header.
+  Free tier: 100 requests/day, every endpoint included — kept within budget by only
+  tracking a fixed list of major leagues (`DEFAULT_LEAGUE_IDS`) rather than every
+  league in existence.
 - `odds_client.py` — client for [The Odds API](https://the-odds-api.com), a documented,
-  inexpensive odds source with a stable REST contract. The Odds API keys tennis
-  per-tournament rather than one blanket `tennis_atp`/`tennis_wta` sport (e.g.
-  `tennis_atp_wimbledon`, `tennis_atp_french_open`), and a key only exists while that
-  tournament is in season, so `OddsAPIClient` first lists currently in-season sports via
-  `/v4/sports` and queries every tournament key matching the requested tour prefix
-  (`tennis_atp` or `tennis_wta`). Good complement to Sportradar/RapidAPI, which often
-  don't include live bookmaker odds on cheaper tiers. `get_odds_for_bookmakers()` filters
-  to specific bookmaker keys — by default `tipico_de`, so the odds recorded are Tipico's
-  — via The Odds API's own `bookmakers` param, rather than scraping tipico.de directly.
-- `ingest.py` — orchestrates one ingestion cycle: pull rankings → upsert `players`;
-  pull upcoming schedule → upsert `matches`; pull Tipico odds (falling back to the
-  broader eu/uk/us region odds if Tipico hasn't posted a line yet) for those matches →
-  insert `odds` snapshots (append-only, so line movement over time is preserved).
+  inexpensive odds source with a stable REST contract. Unlike tennis (which keys odds
+  per-tournament, ephemeral to that event's dates), football sport keys are stable,
+  season-long competitions (e.g. `soccer_epl`, `soccer_germany_bundesliga`), so
+  `OddsAPIClient` just queries the fixed list directly instead of discovering
+  "currently in season" keys first. `get_odds_for_bookmakers()` filters to specific
+  bookmaker keys — by default `tipico_de`, so the odds recorded are Tipico's — via The
+  Odds API's own `bookmakers` param, rather than scraping tipico.de directly. Football's
+  `h2h` market returns three outcomes per event (home team, away team, and the literal
+  string `"Draw"`), unlike tennis's two.
+- `ingest.py` — orchestrates one ingestion cycle per configured league: pull upcoming
+  fixtures → upsert `matches`; pull recent finished fixtures → backfill training data;
+  pull standings → update each `teams` row's league position/points; pull Tipico 1X2
+  odds (falling back to the broader eu/uk/us region odds if Tipico hasn't posted a line
+  yet) for those matches → insert `odds` snapshots (append-only, so line movement over
+  time is preserved).
 
 ### 2.2 Storage (`src/db/`)
 Postgres via SQLAlchemy. Chosen over a NoSQL/BigQuery option because the domain is
-relational (players ↔ matches ↔ odds ↔ predictions) and small in volume (tens of
-thousands of matches/year) — a $0–25/mo serverless Postgres instance is plenty.
+relational (teams ↔ matches ↔ odds ↔ predictions) and small in volume (a handful of
+major leagues' worth of fixtures per season) — a $0–25/mo serverless Postgres instance
+is plenty.
 
-Tables: `players`, `ranking_history`, `matches`, `match_stats`, `odds`, `predictions`.
+Tables: `teams`, `matches`, `odds`, `predictions`, `sync_state`.
 
 ### 2.3 ML model (`src/ml/`)
-- `features.py` — builds a symmetric feature vector per match from two perspectives
-  (player A vs B, and B vs A, each a separate training row) so the model doesn't learn
-  a "player 1 always wins" artifact. Features: ranking/points diff, recent form
-  (win-rate over last 10 matches), surface win-rate diff, H2H win-rate, days since last
-  match (fatigue proxy).
+- `features.py` — builds one feature row per finished match, from the home team's
+  perspective (football has a real home/away asymmetry — home advantage is a genuine,
+  learnable signal — unlike tennis, which had no home/away and so duplicated every
+  match symmetrically to cancel out positional bias). Features: league position/points
+  diff, recent form (points-per-game over the last 10 matches), recent goal-difference
+  average, head-to-head points-per-game between the two teams, days since each team's
+  last match (fatigue proxy).
 - `train.py` — pulls finished matches from Postgres into pandas, trains an
-  `XGBClassifier` (binary: does player A win), evaluates log-loss/AUC on a held-out
-  time split (never shuffle chronological sports data), and saves the model + feature
-  list to `models/model.json` (and optionally uploads to S3/GCS).
-- `predict.py` — for each upcoming match, builds features, gets `P(A wins)` from the
-  model, and combines it with the best available decimal odds to compute expected
-  value: `EV = prob * decimal_odds - 1`. Matches with positive EV above a threshold are
-  flagged as "value bets" and written to `predictions`.
+  `XGBClassifier` (3-class: away win / draw / home win via `multi:softprob`), evaluates
+  log-loss/accuracy on a held-out split, and saves the model + feature list to
+  `models/model.json`.
+- `predict.py` — for each upcoming match, builds features, gets
+  `P(home) / P(draw) / P(away)` from the model, and combines each with the best
+  available decimal odds for that outcome to compute expected value:
+  `EV = prob * decimal_odds - 1`. The single best-EV outcome across all three is stored
+  as the match's `value_pick`; matches whose best EV clears a threshold are flagged as
+  "value bets" and written to `predictions`.
 
 ### 2.4 LLM chat layer (`src/llm/`)
 - `tools.py` — plain Python functions (`get_upcoming_matches`, `get_match_prediction`,
@@ -112,20 +121,21 @@ Tables: `players`, `ranking_history`, `matches`, `match_stats`, `odds`, `predict
   `assistant.ask()` when `OPENAI_API_KEY` is set, else a small rule-based offline
   responder built on the same tool functions/demo data.
 - `static/` — a single-page "JARVIS" HUD: dark holographic theme, an animated
-  arc-reactor status indicator, per-match win-probability/odds/EV cards, a scrolling
+  arc-reactor status indicator, per-match 1X2 win-probability/odds/EV cards, a scrolling
   value-bet ticker, and a chat panel with a typewriter effect and optional
   browser-native text-to-speech (`SpeechSynthesis`) so answers are "spoken" back,
   reminiscent of Iron Man's J.A.R.V.I.S. Plain HTML/CSS/JS — no build step.
 
-### 2.5 Scheduling & deployment (`cloud/`)
-Two independent scheduled jobs, deployed as containers so `xgboost`/`pandas` fit
-comfortably (they exceed the plain zip Lambda size limit):
-- **Ingestion**: every 15–60 min (more often close to match time for odds).
-- **Prediction**: once daily, plus re-run a few hours before big matches.
-- **Training**: weekly, or triggered manually after ingesting a big batch of results.
+### 2.6 Scheduling & deployment
+This project runs on **GitHub Actions** (`.github/workflows/pipeline.yml`), not the AWS
+Lambda setup `cloud/` describes below — a daily `schedule` trigger runs ingest → train
+→ predict in sequence, and the same workflow can be dispatched manually for a single
+step (`init-db`, `ingest`, `train-and-predict`, `predict-only`). The web UI itself is
+deployed separately via `render.yaml` on [Render](https://render.com)'s free tier.
 
-`cloud/template.yaml` is an AWS SAM template wiring these up as container-image Lambdas
-on EventBridge schedules, reading secrets (API keys, DB URL) from AWS Secrets Manager.
+`cloud/` (Lambda handlers, `template.yaml` AWS SAM template) is an alternative,
+more-scalable deployment path for higher-frequency ingestion than a single daily GitHub
+Actions run — see below if you outgrow the GitHub Actions + Render setup.
 
 ## 3. Cloud provider recommendation
 
@@ -147,28 +157,28 @@ pick — it's the single biggest cost lever in this stack.
 
 | Item | Estimate | Notes |
 |---|---|---|
-| Tennis stats API | $0–150+ | RapidAPI tennis providers have freemium tiers ($0–25/mo) with limited calls/day; Sportradar is enterprise-priced (often $500+/mo, quote-based) — start on RapidAPI/API-Tennis and only upgrade if coverage/latency is insufficient |
+| Football stats API (API-Sports.io) | $0–20 | Free tier: 100 requests/day, every endpoint included — plenty for a handful of leagues polled daily; paid tiers only needed for higher-frequency or wider-league coverage |
 | Odds API (The Odds API) | $0–59 | Free tier: 500 requests/mo; $59/mo tier covers frequent polling of a few sports |
 | Postgres (Neon/Supabase free–pro) | $0–25 | Free tier is enough for solo use; paid tier removes cold-starts/sleep |
-| Compute (Lambda/Cloud Run, low volume) | ~$0–5 | A few thousand short invocations/month is within free tiers |
-| S3/Cloud Storage | <$1 | Tiny model artifacts |
+| Compute (GitHub Actions / Render free tier) | $0 | A daily scheduled run plus a low-traffic web service both fit comfortably in free-tier minutes |
 | OpenAI API (gpt-4o-mini for chat) | $2–20 | Depends on chat volume; each Q&A is a handful of cheap tool-augmented calls |
-| **Total** | **~$5–260/mo** | Dominated entirely by which stats-API tier you need; the ML+LLM+hosting portion is cheap |
+| **Total** | **~$2–125/mo** | Free tiers alone cover light personal use entirely; costs only appear if you outgrow them |
 
 Two things worth deciding up front because they drive cost the most:
 1. **How real-time do you need odds?** Live in-play odds require frequent polling and
-   push the odds-API tier up; pre-match odds fetched hourly are much cheaper.
-2. **Coverage** (ATP/WTA only vs. Challengers/ITF) directly drives which stats-API tier
-   you need — broader coverage means a pricier plan.
+   push the odds-API tier up; pre-match odds fetched daily are much cheaper.
+2. **Coverage** (how many leagues) directly drives both the stats-API and odds-API tier
+   you need — broader coverage means more requests per ingestion run.
 
 ## 5. Notes & caveats
 
 - Use official, documented APIs (as built here) rather than scraping bookmaker sites —
   scraping odds pages usually violates ToS and is fragile; the free/paid odds APIs
   exist specifically to be used programmatically.
-- Sportradar/RapidAPI endpoint paths vary by product and subscription tier — the ones
-  in `api_client.py` are placeholders to be filled in from your provider's docs after
-  you subscribe (`ENDPOINTS` dict at the top of the file).
+- `football_client.py`'s response-shape parsing follows API-Sports.io's documented
+  format rather than a live-tested payload, so `ingest.py` treats an unexpected shape
+  the same as an unavailable source (skip + log) rather than crashing — check the logs
+  after the first real ingestion run and adjust field names there if needed.
 - This system produces *statistical* win probabilities and EV estimates for
   informational purposes — it is not gambling advice, odds can move after predictions
   are computed, and past performance doesn't guarantee results. Bet responsibly and

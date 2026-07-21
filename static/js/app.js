@@ -71,8 +71,8 @@
     }
     matchListEl.innerHTML = state.matches.map((m) => `
       <div class="match-card ${m.match_id === state.selectedId ? "selected" : ""}" data-id="${m.match_id}">
-        <div class="mc-top"><span>${m.tournament} · ${m.round}</span><span>${fmtTime(m.start_time)}</span></div>
-        <div class="mc-players"><b>${m.player1.name}</b> vs <b>${m.player2.name}</b></div>
+        <div class="mc-top"><span>${m.league}${m.round ? " · " + m.round : ""}</span><span>${fmtTime(m.start_time)}</span></div>
+        <div class="mc-players"><b>${m.home_team.name}</b> vs <b>${m.away_team.name}</b></div>
         <div class="mc-value">
           ${m.has_prediction === false
             ? `<span style="color:var(--text-dim)">WIRD ANALYSIERT…</span>`
@@ -96,28 +96,32 @@
     }
     if (m.has_prediction === false) {
       detailEl.innerHTML = `
-        <div class="detail-head"><span class="tourney">${m.tournament} — ${m.round || "?"} — ${m.surface || "?"}</span></div>
-        <div class="detail-players">${m.player1.name}<span class="vs">VS</span>${m.player2.name}</div>
+        <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span></div>
+        <div class="detail-players">${m.home_team.name}<span class="vs">VS</span>${m.away_team.name}</div>
         <div class="placeholder">Noch keine Modell-Prognose für dieses Match — der nächste Trainingslauf holt das nach.</div>
       `;
       return;
     }
-    const p1 = m.player1, p2 = m.player2;
-    const p1Pct = m.player1_win_prob, p2Pct = m.player2_win_prob;
+    const home = m.home_team, away = m.away_team;
     detailEl.innerHTML = `
-      <div class="detail-head"><span class="tourney">${m.tournament} — ${m.round} — ${m.surface}</span></div>
-      <div class="detail-players">${p1.name}<span class="vs">VS</span>${p2.name}</div>
+      <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span></div>
+      <div class="detail-players">${home.name}<span class="vs">VS</span>${away.name}</div>
 
       <div class="prob-row">
         <div class="prob-col">
-          <div class="name">${p1.name}</div>
-          <div class="gauge"><div class="gauge-fill" style="width:${pct(p1Pct)}"></div></div>
-          <div class="prob-pct">${pct(p1Pct)}</div>
+          <div class="name">${home.name}</div>
+          <div class="gauge"><div class="gauge-fill" style="width:${pct(m.home_win_prob)}"></div></div>
+          <div class="prob-pct">${pct(m.home_win_prob)}</div>
         </div>
         <div class="prob-col">
-          <div class="name">${p2.name}</div>
-          <div class="gauge"><div class="gauge-fill" style="width:${pct(p2Pct)}"></div></div>
-          <div class="prob-pct">${pct(p2Pct)}</div>
+          <div class="name">Unentschieden</div>
+          <div class="gauge"><div class="gauge-fill" style="width:${pct(m.draw_prob)}"></div></div>
+          <div class="prob-pct">${pct(m.draw_prob)}</div>
+        </div>
+        <div class="prob-col">
+          <div class="name">${away.name}</div>
+          <div class="gauge"><div class="gauge-fill" style="width:${pct(m.away_win_prob)}"></div></div>
+          <div class="prob-pct">${pct(m.away_win_prob)}</div>
         </div>
       </div>
 
@@ -125,12 +129,15 @@
         ? `<div class="placeholder">Für dieses Match liegt noch keine Tipico-Quote vor — sobald eine reinkommt, siehst du hier EV und Value-Bet-Check.</div>`
         : `
       <div class="odds-grid">
-        <div class="odds-box"><div class="label">TIPICO — ${p1.name.split(" ").pop()}</div><div class="val">${m.tipico_player1_odds.toFixed(2)}</div></div>
-        <div class="odds-box"><div class="label">TIPICO — ${p2.name.split(" ").pop()}</div><div class="val">${m.tipico_player2_odds.toFixed(2)}</div></div>
+        <div class="odds-box"><div class="label">TIPICO — 1 (${home.name.split(" ").pop()})</div><div class="val">${m.home_odds.toFixed(2)}</div></div>
+        <div class="odds-box"><div class="label">TIPICO — X</div><div class="val">${m.draw_odds != null ? m.draw_odds.toFixed(2) : "–"}</div></div>
+        <div class="odds-box"><div class="label">TIPICO — 2 (${away.name.split(" ").pop()})</div><div class="val">${m.away_odds.toFixed(2)}</div></div>
+      </div>
+      <div class="odds-grid" style="grid-template-columns: 1fr; margin-top: 10px;">
         <div class="odds-box ${m.expected_value >= 0 ? "ev-positive" : "ev-negative"}"><div class="label">EXPECTED VALUE</div><div class="val">${m.expected_value >= 0 ? "+" : ""}${(m.expected_value * 100).toFixed(1)}%</div></div>
       </div>
 
-      ${m.is_value_bet ? `<div class="value-banner">VALUE BET DETECTED — model favors ${m.pick} beyond Tipico's price</div>` : ""}
+      ${m.is_value_bet ? `<div class="value-banner">VALUE BET DETECTED — model favors ${m.value_pick} beyond Tipico's price</div>` : ""}
       `}
     `;
   }
@@ -169,10 +176,7 @@
         tickerEl.innerHTML = "<span>No positive-EV bets against Tipico's line right now.</span>";
         return;
       }
-      const text = bets.map((b) => {
-        const pick = b.pick || (b.player1_win_prob >= 0.5 ? b.player1?.name : b.player2?.name);
-        return `${pick} @ ${b.tournament} — EV ${(b.expected_value * 100).toFixed(1)}%`;
-      }).join("     •     ");
+      const text = bets.map((b) => `${b.pick} @ ${b.league} — EV ${(b.expected_value * 100).toFixed(1)}%`).join("     •     ");
       tickerEl.innerHTML = `<span>${text}</span>`;
     } catch (e) {
       tickerEl.innerHTML = "<span>Ticker offline.</span>";

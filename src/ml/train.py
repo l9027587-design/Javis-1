@@ -1,7 +1,8 @@
-"""Train an XGBoost win-probability model from the matches stored in Postgres.
+"""Train an XGBoost 1X2 (home/draw/away) model from the matches stored in Postgres.
 
-Run manually or on a weekly schedule (see cloud/template.yaml). Saves the model plus
-its feature list as JSON so `predict.py` can load it without re-importing this module.
+Run manually or on the daily schedule (see .github/workflows/pipeline.yml). Saves the
+model plus its feature list as JSON so `predict.py` can load it without re-importing
+this module.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ import logging
 from pathlib import Path
 
 import xgboost as xgb
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.metrics import accuracy_score, log_loss
 from sklearn.model_selection import train_test_split
 
 from src.db.session import get_session
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 MODEL_PATH = MODEL_DIR / "model.json"
-MODEL_VERSION = "xgb-v1"
+MODEL_VERSION = "xgb-1x2-v1"
 
 
 def train() -> dict[str, float]:
@@ -33,24 +34,24 @@ def train() -> dict[str, float]:
         )
 
     X, y = df[FEATURE_COLUMNS], df["label"]
-    # Chronological data: a plain random split is fine here only because rows are already
-    # duplicated symmetrically; for a more rigorous eval, sort by match date and split by time.
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     model = xgb.XGBClassifier(
+        objective="multi:softprob",
+        num_class=3,
         n_estimators=300,
         max_depth=4,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
-        eval_metric="logloss",
+        eval_metric="mlogloss",
     )
     model.fit(X_train, y_train)
 
-    proba = model.predict_proba(X_test)[:, 1]
+    proba = model.predict_proba(X_test)
     metrics = {
-        "log_loss": log_loss(y_test, proba),
-        "roc_auc": roc_auc_score(y_test, proba),
+        "log_loss": log_loss(y_test, proba, labels=[0, 1, 2]),
+        "accuracy": accuracy_score(y_test, proba.argmax(axis=1)),
         "n_train": len(X_train),
         "n_test": len(X_test),
     }

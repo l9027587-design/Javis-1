@@ -24,9 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      TENNIS_API_PROVIDER: ${{ vars.TENNIS_API_PROVIDER }}
-      TENNIS_API_KEY: ${{ secrets.TENNIS_API_KEY }}
-      TENNIS_API_HOST: ${{ vars.TENNIS_API_HOST }}
+      FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       ODDS_BOOKMAKERS: ${{ vars.ODDS_BOOKMAKERS }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
