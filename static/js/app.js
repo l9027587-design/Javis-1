@@ -57,8 +57,8 @@
       const data = await res.json();
       statusPill.classList.toggle("online", !data.demo_mode);
       statusPill.classList.toggle("demo", data.demo_mode);
-      statusText.textContent = data.demo_mode ? "SIMULATION MODE" : "LIVE";
-      sourceLabel.textContent = `data source: ${data.data_source}`;
+      statusText.textContent = data.demo_mode ? "SIMULATIONSMODUS" : "LIVE";
+      sourceLabel.textContent = `Datenquelle: ${data.data_source}`;
     } catch (e) {
       statusText.textContent = "OFFLINE";
     }
@@ -66,7 +66,7 @@
 
   function renderMatchList() {
     if (!state.matches.length) {
-      matchListEl.innerHTML = '<div class="loading">NO FIXTURES FOUND</div>';
+      matchListEl.innerHTML = '<div class="loading">KEINE SPIELE GEFUNDEN</div>';
       return;
     }
     matchListEl.innerHTML = state.matches.map((m) => `
@@ -79,7 +79,7 @@
             : m.expected_value == null
               ? `<span style="color:var(--text-dim)">KEINE QUOTE</span>`
               : m.is_value_bet
-                ? `<span class="value-tag">EDGE ${(m.expected_value * 100).toFixed(1)}%</span>`
+                ? `<span class="value-tag">VORTEIL ${(m.expected_value * 100).toFixed(1)}%</span>`
                 : `<span style="color:var(--text-dim)">EV ${(m.expected_value * 100).toFixed(1)}%</span>`}
         </div>
       </div>
@@ -91,7 +91,7 @@
 
   function renderDetail(m) {
     if (!m) {
-      detailEl.innerHTML = '<div class="placeholder">Select a match to run the analysis.</div>';
+      detailEl.innerHTML = '<div class="placeholder">Wähle ein Spiel für die Analyse aus.</div>';
       return;
     }
     if (m.has_prediction === false) {
@@ -134,10 +134,10 @@
         <div class="odds-box"><div class="label">TIPICO — 2 (${away.name.split(" ").pop()})</div><div class="val">${m.away_odds.toFixed(2)}</div></div>
       </div>
       <div class="odds-grid" style="grid-template-columns: 1fr; margin-top: 10px;">
-        <div class="odds-box ${m.expected_value >= 0 ? "ev-positive" : "ev-negative"}"><div class="label">EXPECTED VALUE</div><div class="val">${m.expected_value >= 0 ? "+" : ""}${(m.expected_value * 100).toFixed(1)}%</div></div>
+        <div class="odds-box ${m.expected_value >= 0 ? "ev-positive" : "ev-negative"}"><div class="label">ERWARTUNGSWERT</div><div class="val">${m.expected_value >= 0 ? "+" : ""}${(m.expected_value * 100).toFixed(1)}%</div></div>
       </div>
 
-      ${m.is_value_bet ? `<div class="value-banner">VALUE BET DETECTED — model favors ${m.value_pick} beyond Tipico's price</div>` : ""}
+      ${m.is_value_bet ? `<div class="value-banner">WERTWETTE ERKANNT — Modell sieht ${m.value_pick} im Vorteil gegenüber Tipicos Quote</div>` : ""}
       `}
     `;
   }
@@ -161,7 +161,7 @@
       // Render's free tier + a suspended Neon DB can occasionally take longer to wake
       // than even the widened retry budget covers -- offer a one-tap manual retry
       // instead of forcing a full page reload.
-      matchListEl.innerHTML = '<div class="loading">CONNECTION LOST<br><button id="retry-matches" class="retry-btn">NOCHMAL VERSUCHEN</button></div>';
+      matchListEl.innerHTML = '<div class="loading">VERBINDUNG VERLOREN<br><button id="retry-matches" class="retry-btn">NOCHMAL VERSUCHEN</button></div>';
       const retryBtn = document.getElementById("retry-matches");
       if (retryBtn) retryBtn.addEventListener("click", () => loadMatches().then(loadTicker));
     }
@@ -173,13 +173,13 @@
       const data = await res.json();
       const bets = data.value_bets || [];
       if (!bets.length) {
-        tickerEl.innerHTML = "<span>No positive-EV bets against Tipico's line right now.</span>";
+        tickerEl.innerHTML = "<span>Gerade keine Wetten mit positivem Erwartungswert gegenüber Tipicos Quoten.</span>";
         return;
       }
       const text = bets.map((b) => `${b.pick} @ ${b.league} — EV ${(b.expected_value * 100).toFixed(1)}%`).join("     •     ");
       tickerEl.innerHTML = `<span>${text}</span>`;
     } catch (e) {
-      tickerEl.innerHTML = "<span>Ticker offline.</span>";
+      tickerEl.innerHTML = "<span>Ticker nicht erreichbar.</span>";
     }
   }
 
@@ -240,7 +240,7 @@
   function addMessage(who, text, animate) {
     const wrap = document.createElement("div");
     wrap.className = `msg ${who}`;
-    wrap.innerHTML = `<span class="who">${who === "jarvis" ? "JARVIS" : "YOU"}</span><span class="txt"></span>`;
+    wrap.innerHTML = `<span class="who">${who === "jarvis" ? "JARVIS" : "DU"}</span><span class="txt"></span>`;
     chatLog.appendChild(wrap);
     chatLog.scrollTop = chatLog.scrollHeight;
     const txtEl = wrap.querySelector(".txt");
