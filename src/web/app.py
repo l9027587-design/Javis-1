@@ -81,7 +81,7 @@ def status() -> dict:
         "online": True,
         "time": dt.datetime.utcnow().isoformat() + "Z",
         "demo_mode": demo,
-        "data_source": "Tipico (simulated feed)" if demo else f"Tipico via The Odds API (bookmakers={settings.odds_bookmakers or 'eu region'})",
+        "data_source": "Tipico (simulierter Feed)" if demo else f"Tipico über The Odds API (Buchmacher={settings.odds_bookmakers or 'EU-Region'})",
         "assistant_ready": bool(settings.openai_api_key),
         "match_count": len(matches),
         "debug_reason": _last_demo_reason if demo else None,
