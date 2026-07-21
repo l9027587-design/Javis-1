@@ -3,7 +3,7 @@
 Designed to be called repeatedly on a schedule (see .github/workflows/pipeline.yml).
 Each call is idempotent: teams/matches are upserted by external_id, odds are appended
 as a new snapshot so line movement is preserved over time. Fixtures/standings come from
-API-Sports.io's Football API (football_client.py); odds come from The Odds API.
+football-data.org (football_client.py); odds come from The Odds API.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Finished-match backfill and league standings barely change within a day, so skip
 # re-fetching them on every ingestion run within this window -- keeps the free-tier
-# 100-req/day API-Sports.io quota spent mostly on the upcoming schedule instead.
+# 10-req/min football-data.org quota spent mostly on the upcoming schedule instead.
 RESULTS_FRESHNESS = dt.timedelta(hours=20)
 STANDINGS_FRESHNESS = dt.timedelta(hours=20)
 
@@ -58,52 +58,40 @@ def _upsert_team(session: Session, external_id: str, name: str) -> Team:
     return team
 
 
-def _current_season(today: dt.date) -> int:
-    """API-Sports.io's 'season' param is the season's start year (e.g. 2025 for the
-    2025-26 European season, which runs roughly August-May)."""
-    return today.year if today.month >= 7 else today.year - 1
-
-
-def sync_schedule(session: Session, league_id: int, league_name: str, days_ahead: int = 7) -> int:
+def sync_schedule(session: Session, league_code: str, league_name: str, days_ahead: int = 10) -> int:
     """Fetch upcoming fixtures for one league and upsert them."""
     try:
-        raw_fixtures = football_client.get_upcoming_fixtures(league_id, _current_season(dt.date.today()), count=15)
+        raw_fixtures = football_client.get_upcoming_fixtures(league_code, days_ahead=days_ahead)
     except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
         logger.warning("Football schedule unavailable for league=%s: %s", league_name, exc)
         return 0
 
-    today = dt.date.today()
-    window_end = today + dt.timedelta(days=days_ahead)
     count = 0
     for raw in raw_fixtures:
         try:
-            fixture = raw.get("fixture") or {}
-            fixture_id = fixture.get("id")
+            fixture_id = raw.get("id")
             if fixture_id is None:
                 continue
-            start_raw = fixture.get("date")
+            start_raw = raw.get("utcDate")
             if not start_raw:
                 continue
             start = dt.datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
-            if not (today <= start.date() <= window_end):
-                continue
 
-            teams = raw.get("teams") or {}
-            home_raw, away_raw = teams.get("home") or {}, teams.get("away") or {}
+            home_raw, away_raw = raw.get("homeTeam") or {}, raw.get("awayTeam") or {}
             if home_raw.get("id") is None or away_raw.get("id") is None:
                 continue
-            home = _upsert_team(session, f"apisports:{home_raw['id']}", home_raw.get("name") or "TBD")
-            away = _upsert_team(session, f"apisports:{away_raw['id']}", away_raw.get("name") or "TBD")
+            home = _upsert_team(session, f"fdorg:{home_raw['id']}", home_raw.get("name") or "TBD")
+            away = _upsert_team(session, f"fdorg:{away_raw['id']}", away_raw.get("name") or "TBD")
 
-            external_id = f"apisports:{fixture_id}"
+            external_id = f"fdorg:{fixture_id}"
             match = session.scalar(select(Match).where(Match.external_id == external_id))
             if match is None:
                 match = Match(external_id=external_id, home_team_id=home.id, away_team_id=away.id)
                 session.add(match)
 
-            league = raw.get("league") or {}
-            match.league_name = league.get("name") or league_name
-            match.round = league.get("round")
+            matchday = raw.get("matchday")
+            match.league_name = league_name
+            match.round = f"Matchday {matchday}" if matchday is not None else None
             match.status = "scheduled"
             match.start_time = start
             match.home_team_id = home.id
@@ -116,15 +104,15 @@ def sync_schedule(session: Session, league_id: int, league_name: str, days_ahead
     return count
 
 
-def sync_results(session: Session, league_id: int, league_name: str) -> int:
+def sync_results(session: Session, league_code: str, league_name: str) -> int:
     """Backfill finished fixtures (with score + winner) for one league, used as training data."""
-    sync_key = f"results:{league_id}"
+    sync_key = f"results:{league_code}"
     if _recently_synced(session, sync_key, RESULTS_FRESHNESS):
         logger.info("Results for league=%s synced within the last %s, skipping", league_name, RESULTS_FRESHNESS)
         return 0
 
     try:
-        raw_fixtures = football_client.get_recent_results(league_id, _current_season(dt.date.today()), count=60)
+        raw_fixtures = football_client.get_recent_results(league_code, days_back=45)
     except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
         logger.warning("Football results unavailable for league=%s: %s", league_name, exc)
         return 0
@@ -132,38 +120,35 @@ def sync_results(session: Session, league_id: int, league_name: str) -> int:
     count = 0
     for raw in raw_fixtures:
         try:
-            fixture = raw.get("fixture") or {}
-            fixture_id = fixture.get("id")
-            status = (fixture.get("status") or {}).get("short")
-            if fixture_id is None or status not in ("FT", "AET", "PEN"):
+            fixture_id = raw.get("id")
+            if fixture_id is None or raw.get("status") != "FINISHED":
                 continue
-            start_raw = fixture.get("date")
+            start_raw = raw.get("utcDate")
             if not start_raw:
                 continue
             start = dt.datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
 
-            teams = raw.get("teams") or {}
-            home_raw, away_raw = teams.get("home") or {}, teams.get("away") or {}
+            home_raw, away_raw = raw.get("homeTeam") or {}, raw.get("awayTeam") or {}
             if home_raw.get("id") is None or away_raw.get("id") is None:
                 continue
 
-            goals = raw.get("goals") or {}
-            home_score, away_score = goals.get("home"), goals.get("away")
+            full_time = (raw.get("score") or {}).get("fullTime") or {}
+            home_score, away_score = full_time.get("home"), full_time.get("away")
             if home_score is None or away_score is None:
                 continue
 
-            home = _upsert_team(session, f"apisports:{home_raw['id']}", home_raw.get("name") or "TBD")
-            away = _upsert_team(session, f"apisports:{away_raw['id']}", away_raw.get("name") or "TBD")
+            home = _upsert_team(session, f"fdorg:{home_raw['id']}", home_raw.get("name") or "TBD")
+            away = _upsert_team(session, f"fdorg:{away_raw['id']}", away_raw.get("name") or "TBD")
 
-            external_id = f"apisports:{fixture_id}"
+            external_id = f"fdorg:{fixture_id}"
             match = session.scalar(select(Match).where(Match.external_id == external_id))
             if match is None:
                 match = Match(external_id=external_id, home_team_id=home.id, away_team_id=away.id)
                 session.add(match)
 
-            league = raw.get("league") or {}
-            match.league_name = league.get("name") or league_name
-            match.round = league.get("round")
+            matchday = raw.get("matchday")
+            match.league_name = league_name
+            match.round = f"Matchday {matchday}" if matchday is not None else None
             match.status = "finished"
             match.start_time = start
             match.home_team_id = home.id
@@ -186,32 +171,29 @@ def sync_results(session: Session, league_id: int, league_name: str) -> int:
     return count
 
 
-def sync_standings(session: Session, league_id: int, league_name: str) -> int:
+def sync_standings(session: Session, league_code: str, league_name: str) -> int:
     """Update each team's current league position/points."""
-    sync_key = f"standings:{league_id}"
+    sync_key = f"standings:{league_code}"
     if _recently_synced(session, sync_key, STANDINGS_FRESHNESS):
         logger.info("Standings for league=%s synced within the last %s, skipping", league_name, STANDINGS_FRESHNESS)
         return 0
 
     try:
-        raw = football_client.get_standings(league_id, _current_season(dt.date.today()))
+        table = football_client.get_standings(league_code)
     except (requests.RequestException, KeyError, AttributeError, ValueError) as exc:
         logger.warning("Standings unavailable for league=%s: %s", league_name, exc)
         return 0
 
     count = 0
     try:
-        for league_block in raw:
-            groups = (league_block.get("league") or {}).get("standings") or []
-            for group in groups:
-                for entry in group:
-                    team_raw = entry.get("team") or {}
-                    if team_raw.get("id") is None:
-                        continue
-                    team = _upsert_team(session, f"apisports:{team_raw['id']}", team_raw.get("name") or "TBD")
-                    team.league_position = entry.get("rank")
-                    team.league_points = entry.get("points")
-                    count += 1
+        for entry in table:
+            team_raw = entry.get("team") or {}
+            if team_raw.get("id") is None:
+                continue
+            team = _upsert_team(session, f"fdorg:{team_raw['id']}", team_raw.get("name") or "TBD")
+            team.league_position = entry.get("position")
+            team.league_points = entry.get("points")
+            count += 1
     except (KeyError, AttributeError, ValueError) as exc:
         logger.warning("Standings unparseable for league=%s: %s", league_name, exc)
 
@@ -294,10 +276,10 @@ def run_ingestion(days_ahead: int = 7) -> dict[str, int]:
 
     results = {"matches": 0, "results": 0, "standings": 0, "odds": 0}
     with get_session() as session:
-        for league_id, league_name in football_client.DEFAULT_LEAGUE_IDS.items():
-            results["matches"] += sync_schedule(session, league_id, league_name, days_ahead=days_ahead)
-            results["results"] += sync_results(session, league_id, league_name)
-            results["standings"] += sync_standings(session, league_id, league_name)
+        for league_code, league_name in football_client.DEFAULT_LEAGUE_CODES.items():
+            results["matches"] += sync_schedule(session, league_code, league_name, days_ahead=days_ahead)
+            results["results"] += sync_results(session, league_code, league_name)
+            results["standings"] += sync_standings(session, league_code, league_name)
         results["odds"] += sync_odds(session, OddsAPIClient())
     return results
 

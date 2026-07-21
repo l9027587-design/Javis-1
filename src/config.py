@@ -40,8 +40,10 @@ class Settings:
     # `os.getenv(name) or default` (not the two-arg form) is deliberate: GitHub Actions
     # sets a referenced-but-undefined `vars.X` to an empty string rather than leaving it
     # unset, which would silently defeat a `os.getenv(name, default)` fallback.
-    # API-Sports.io's Football API (https://api-sports.io/sports/football) -- fixtures,
+    # football-data.org's Football API (https://www.football-data.org/) -- fixtures,
     # results, and standings. Auth is a single header, no separate host/provider needed.
+    # (API-Sports.io was tried first, but its free tier only allows the 2022-2024
+    # seasons -- rejects any request for the current one.)
     football_api_key: str = _clean(os.getenv("FOOTBALL_API_KEY", ""))
 
     odds_api_key: str = _clean(os.getenv("ODDS_API_KEY", ""))

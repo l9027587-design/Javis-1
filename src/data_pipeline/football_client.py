@@ -1,70 +1,83 @@
-"""Client for API-Sports.io's Football API (https://api-sports.io/sports/football),
-used for the fixtures schedule, results backfill, and league standings -- replaces the
-tennis stats provider entirely now that the app covers football instead of tennis.
+"""Client for football-data.org's Football API (https://www.football-data.org/), used
+for the fixtures schedule, results backfill, and league standings.
 
-Free tier: 100 requests/day, every endpoint included, single API key
-(https://www.api-football.com/ -- "HOW TO GET STARTED" guide). Auth is one header
-(x-apisports-key), not a query-param key like some RapidAPI-fronted providers use.
+Free tier: 10 requests/minute, current-season data included -- unlike API-Sports.io's
+free tier (tried first), which turned out to only allow the 2022-2024 seasons and
+rejects any request for the current one. Auth is a single header (X-Auth-Token).
 
-Endpoint shapes below follow API-Football v3's documented/widely-tutorialized response
-format (https://api-sports.io/documentation/football/v3) rather than a live test against
-a real key, so exact field names are a best-effort match -- ingest.py parses defensively
+Endpoint shapes follow football-data.org's documented v4 API
+(https://docs.football-data.org/general/v4/) rather than a live test against a real
+key, so exact field names are a best-effort match -- ingest.py parses defensively
 (skip + log on an unexpected shape) the same way it already does for other sources.
 """
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import requests
 
 from src.config import settings
 
-BASE_URL = "https://v3.football.api-sports.io"
+BASE_URL = "https://api.football-data.org/v4"
 
-# A handful of major leagues, to stay well within the 100-req/day free tier -- each
-# ingest run costs ~2 calls per league (upcoming fixtures + recent results), so this
-# list directly controls the daily request budget. IDs are API-Sports.io's own,
-# documented via its Leagues endpoint.
-DEFAULT_LEAGUE_IDS: dict[int, str] = {
-    39: "Premier League",
-    140: "La Liga",
-    78: "Bundesliga",
-    135: "Serie A",
-    61: "Ligue 1",
-    2: "UEFA Champions League",
+# football-data.org's own competition codes -- covers the same leagues this app
+# tracked under API-Sports.io's numeric league IDs.
+DEFAULT_LEAGUE_CODES: dict[str, str] = {
+    "PL": "Premier League",
+    "PD": "La Liga",
+    "BL1": "Bundesliga",
+    "SA": "Serie A",
+    "FL1": "Ligue 1",
+    "CL": "UEFA Champions League",
 }
 
 
 def _headers() -> dict[str, str]:
-    return {"x-apisports-key": settings.football_api_key}
+    return {"X-Auth-Token": settings.football_api_key}
 
 
-def _get(path: str, params: dict[str, Any] | None = None) -> list[dict]:
+def _get(path: str, params: dict[str, Any] | None = None) -> dict:
     response = requests.get(f"{BASE_URL}{path}", headers=_headers(), params=params or {}, timeout=15)
     if not response.ok:
         raise requests.HTTPError(
             f"{response.status_code} for {response.url}: {response.text[:300]}", response=response
         )
-    data = response.json()
-    errors = data.get("errors")
-    if errors:
-        # api-sports.io returns HTTP 200 with a populated "errors" object for things
-        # like an invalid key or an exhausted daily quota, rather than a 4xx -- surface
-        # it as a real exception instead of silently returning an empty response.
-        raise requests.HTTPError(f"api-sports.io error for {response.url}: {errors}")
-    return data.get("response", [])
+    return response.json()
 
 
-def get_upcoming_fixtures(league_id: int, season: int, count: int = 10) -> list[dict]:
-    """Next `count` scheduled fixtures for one league/season."""
-    return _get("/fixtures", params={"league": league_id, "season": season, "next": count})
+def get_upcoming_fixtures(competition_code: str, days_ahead: int = 10) -> list[dict]:
+    """Scheduled matches for one competition within the next `days_ahead` days."""
+    today = dt.date.today()
+    data = _get(
+        f"/competitions/{competition_code}/matches",
+        params={
+            "dateFrom": today.isoformat(),
+            "dateTo": (today + dt.timedelta(days=days_ahead)).isoformat(),
+            "status": "SCHEDULED",
+        },
+    )
+    return data.get("matches", [])
 
 
-def get_recent_results(league_id: int, season: int, count: int = 50) -> list[dict]:
-    """Last `count` finished fixtures for one league/season -- used to backfill training data."""
-    return _get("/fixtures", params={"league": league_id, "season": season, "last": count})
+def get_recent_results(competition_code: str, days_back: int = 30) -> list[dict]:
+    """Finished matches for one competition within the last `days_back` days."""
+    today = dt.date.today()
+    data = _get(
+        f"/competitions/{competition_code}/matches",
+        params={
+            "dateFrom": (today - dt.timedelta(days=days_back)).isoformat(),
+            "dateTo": today.isoformat(),
+            "status": "FINISHED",
+        },
+    )
+    return data.get("matches", [])
 
 
-def get_standings(league_id: int, season: int) -> list[dict]:
-    """Current league table for one league/season."""
-    return _get("/standings", params={"league": league_id, "season": season})
+def get_standings(competition_code: str) -> list[dict]:
+    """Current league table for one competition (overall/TOTAL standings)."""
+    data = _get(f"/competitions/{competition_code}/standings")
+    for block in data.get("standings", []):
+        if block.get("type") == "TOTAL":
+            return block.get("table", [])
+    return []

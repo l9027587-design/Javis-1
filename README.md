@@ -15,7 +15,7 @@ src/
   config.py              settings from environment variables
   db/                     SQLAlchemy models + session (Postgres)
   data_pipeline/
-    football_client.py   fixtures/results/standings client (API-Sports.io)
+    football_client.py   fixtures/results/standings client (football-data.org)
     odds_client.py         odds client (the-odds-api.com), incl. Tipico-filtered fetch
     ingest.py               orchestrates one fetch-and-store cycle
   ml/
@@ -97,10 +97,10 @@ uvicorn src.web.app:app --reload --port 8000   # or: the JARVIS web UI, see belo
 ```
 
 Before this will produce real predictions you need: (1) a free
-[API-Sports.io](https://www.api-football.com/) football API key (`FOOTBALL_API_KEY`),
-(2) an [the-odds-api.com](https://the-odds-api.com) key for market odds
-(`ODDS_API_KEY`), (3) enough ingested finished matches for `train.py` to fit a model
-on, and (4) an OpenAI API key.
+[football-data.org](https://www.football-data.org/client/register) API key
+(`FOOTBALL_API_KEY`), (2) an [the-odds-api.com](https://the-odds-api.com) key for
+market odds (`ODDS_API_KEY`), (3) enough ingested finished matches for `train.py` to
+fit a model on, and (4) an OpenAI API key.
 
 ## Deploying to the cloud
 
