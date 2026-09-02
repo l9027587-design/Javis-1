@@ -210,6 +210,7 @@ def get_combo_suggestions(days_ahead: int = 3, min_edge: float = 0.0, max_legs: 
                         "match_id": leg["match_id"],
                         "league": leg["league"],
                         "match": leg["match"],
+                        "start_time": leg["start_time"],
                         "pick": leg["pick"],
                         "odds": leg["best_odds"],
                     }
@@ -244,6 +245,7 @@ def get_combo_history(days_back: int = 14, limit: int = 20) -> list[dict]:
                 "legs": [
                     {
                         "match": f"{leg.match.home_team.name} vs {leg.match.away_team.name}",
+                        "start_time": leg.match.start_time.isoformat(),
                         "pick": leg.pick_name,
                         "odds": round(leg.odds, 2),
                         "status": leg.status,

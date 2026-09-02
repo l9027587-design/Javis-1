@@ -183,6 +183,7 @@ def combo_suggestions(matches: list[dict], min_edge: float = 0.0, max_legs: int 
                     "match_id": leg["match_id"],
                     "league": leg["league"],
                     "match": f"{leg['home_team']['name']} vs {leg['away_team']['name']}",
+                    "start_time": leg["start_time"],
                     "pick": leg["pick"],
                     "odds": odds,
                 }
@@ -218,8 +219,17 @@ def combo_history(count: int = 5) -> list[dict]:
             # which game it's for) -- always pair the pick with both team names.
             side_roll = _seeded_fraction(seed, str(j), "side")
             pick = "Unentschieden" if side_roll < 0.25 else (home_name if side_roll < 0.62 else away_name)
+            # Kickoff a few hours after the combo was suggested (same day), same as a
+            # real save_daily_combo() pick would be for an upcoming match.
+            start_time = now - dt.timedelta(days=i + 1) + dt.timedelta(hours=3 + j * 3)
             legs.append(
-                {"match": f"{home_name} vs {away_name}", "pick": pick, "odds": odds, "status": "won" if hit else "lost"}
+                {
+                    "match": f"{home_name} vs {away_name}",
+                    "start_time": start_time.isoformat() + "Z",
+                    "pick": pick,
+                    "odds": odds,
+                    "status": "won" if hit else "lost",
+                }
             )
         status = "won" if all(leg["status"] == "won" for leg in legs) else "lost"
         history.append(

@@ -239,6 +239,7 @@ html, body {
 }
 .combo-legs { font-size: 13px; color: var(--text); margin-bottom: 8px; }
 .combo-leg b { color: var(--cyan); }
+.combo-leg-date { color: var(--text-dim); font-size: 11px; }
 .combo-summary { display: flex; gap: 18px; font-size: 12px; color: var(--text-dim); flex-wrap: wrap; }
 .combo-summary b { color: var(--text); }
 .combo-summary .ev-positive { color: var(--green); }
