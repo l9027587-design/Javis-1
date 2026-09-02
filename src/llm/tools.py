@@ -20,7 +20,9 @@ def get_upcoming_matches(days_ahead: int = 7) -> list[dict]:
     horizon = now + dt.timedelta(days=days_ahead)
     with get_session() as session:
         matches = session.scalars(
-            select(Match).where(Match.status == "scheduled", Match.start_time.between(now, horizon))
+            select(Match)
+            .where(Match.status == "scheduled", Match.start_time.between(now, horizon))
+            .order_by(Match.start_time)
         ).all()
         return [
             {
@@ -81,7 +83,9 @@ def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
     horizon = now + dt.timedelta(days=days_ahead)
     with get_session() as session:
         matches = session.scalars(
-            select(Match).where(Match.status == "scheduled", Match.start_time.between(now, horizon))
+            select(Match)
+            .where(Match.status == "scheduled", Match.start_time.between(now, horizon))
+            .order_by(Match.start_time)
         ).all()
         if not matches:
             return []
