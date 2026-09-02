@@ -105,7 +105,7 @@
     }
     if (m.has_prediction === false) {
       detailEl.innerHTML = `
-        <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span></div>
+        <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span><span class="detail-date">${fmtTime(m.start_time)}</span></div>
         <div class="detail-players">${m.home_team.name}<span class="vs">VS</span>${m.away_team.name}</div>
         <div class="placeholder">Noch keine Modell-Prognose für dieses Match — der nächste Trainingslauf holt das nach.</div>
       `;
@@ -113,7 +113,7 @@
     }
     const home = m.home_team, away = m.away_team;
     detailEl.innerHTML = `
-      <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span></div>
+      <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span><span class="detail-date">${fmtTime(m.start_time)}</span></div>
       <div class="detail-players">${home.name}<span class="vs">VS</span>${away.name}</div>
 
       <div class="prob-row">
