@@ -66,13 +66,18 @@ def run_daily_predictions(days_ahead: int = 7) -> int | None:
             best_draw_odds = odds.draw_decimal_odds if odds else None
             best_away_odds = odds.away_decimal_odds if odds else None
 
+            # xgboost's predict_proba returns numpy.float32 scalars, and numpy's scalar
+            # arithmetic keeps that dtype (home_prob * a Python float stays float32,
+            # rather than upcasting) -- psycopg2 can't adapt numpy.float32 to a SQL
+            # param, so this needs an explicit cast to a plain Python float before it
+            # ever reaches the candidates list that expected_value gets stored from.
             candidates: list[tuple[str, float]] = []
             if best_home_odds:
-                candidates.append(("home", home_prob * best_home_odds - 1))
+                candidates.append(("home", float(home_prob * best_home_odds - 1)))
             if best_draw_odds:
-                candidates.append(("draw", draw_prob * best_draw_odds - 1))
+                candidates.append(("draw", float(draw_prob * best_draw_odds - 1)))
             if best_away_odds:
-                candidates.append(("away", away_prob * best_away_odds - 1))
+                candidates.append(("away", float(away_prob * best_away_odds - 1)))
 
             value_pick, ev = (None, None)
             is_value = False
