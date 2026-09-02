@@ -178,7 +178,15 @@ def combo_suggestions(matches: list[dict], min_edge: float = 0.0, max_legs: int 
             prob = leg[side_prob[side]]
             combined_odds *= odds
             combined_prob *= prob
-            leg_entries.append({"match_id": leg["match_id"], "league": leg["league"], "pick": leg["pick"], "odds": odds})
+            leg_entries.append(
+                {
+                    "match_id": leg["match_id"],
+                    "league": leg["league"],
+                    "match": f"{leg['home_team']['name']} vs {leg['away_team']['name']}",
+                    "pick": leg["pick"],
+                    "odds": odds,
+                }
+            )
         combos.append(
             {
                 "legs": leg_entries,
@@ -201,11 +209,18 @@ def combo_history(count: int = 5) -> list[dict]:
         legs = []
         combined_odds = 1.0
         for j in range(n_legs):
-            team_name, _ = TEAMS[(i * 3 + j * 2) % len(TEAMS)]
+            home_name, _ = TEAMS[(i * 3 + j * 2) % len(TEAMS)]
+            away_name, _ = TEAMS[(i * 3 + j * 2 + 1) % len(TEAMS)]
             odds = round(1.5 + _seeded_fraction(seed, str(j)) * 2, 2)
             combined_odds *= odds
             hit = _seeded_fraction(seed, str(j), "hit") > 0.4
-            legs.append({"pick": team_name, "odds": odds, "status": "won" if hit else "lost"})
+            # Mirror save_daily_combo()'s pick shape ("Unentschieden" alone doesn't say
+            # which game it's for) -- always pair the pick with both team names.
+            side_roll = _seeded_fraction(seed, str(j), "side")
+            pick = "Unentschieden" if side_roll < 0.25 else (home_name if side_roll < 0.62 else away_name)
+            legs.append(
+                {"match": f"{home_name} vs {away_name}", "pick": pick, "odds": odds, "status": "won" if hit else "lost"}
+            )
         status = "won" if all(leg["status"] == "won" for leg in legs) else "lost"
         history.append(
             {

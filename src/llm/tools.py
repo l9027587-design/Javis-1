@@ -171,6 +171,9 @@ def get_best_value_bets(days_ahead: int = 3, min_edge: float = 0.05, limit: int 
                 {
                     "match_id": match.id,
                     "league": match.league_name,
+                    # "Unentschieden" alone doesn't say which game it's for -- the match
+                    # string always names both teams regardless of which side was picked.
+                    "match": f"{match.home_team.name} vs {match.away_team.name}",
                     "start_time": match.start_time.isoformat(),
                     "pick": pick_map.get(pred.value_pick),
                     "model_win_prob": round(prob_map.get(pred.value_pick, 0.0), 3),
@@ -203,7 +206,13 @@ def get_combo_suggestions(days_ahead: int = 3, min_edge: float = 0.0, max_legs: 
         combos.append(
             {
                 "legs": [
-                    {"match_id": leg["match_id"], "league": leg["league"], "pick": leg["pick"], "odds": leg["best_odds"]}
+                    {
+                        "match_id": leg["match_id"],
+                        "league": leg["league"],
+                        "match": leg["match"],
+                        "pick": leg["pick"],
+                        "odds": leg["best_odds"],
+                    }
                     for leg in legs
                 ],
                 "combined_odds": round(combined_odds, 2),
@@ -232,7 +241,15 @@ def get_combo_history(days_back: int = 14, limit: int = 20) -> list[dict]:
                 "combined_odds": round(c.combined_odds, 2),
                 "combined_prob": round(c.combined_prob, 3),
                 "combined_ev": round(c.combined_ev, 3),
-                "legs": [{"pick": leg.pick_name, "odds": round(leg.odds, 2), "status": leg.status} for leg in c.legs],
+                "legs": [
+                    {
+                        "match": f"{leg.match.home_team.name} vs {leg.match.away_team.name}",
+                        "pick": leg.pick_name,
+                        "odds": round(leg.odds, 2),
+                        "status": leg.status,
+                    }
+                    for leg in c.legs
+                ],
             }
             for c in combos
         ]

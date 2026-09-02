@@ -217,7 +217,7 @@
       }
       comboListEl.innerHTML = combos.map((c) => `
         <div class="combo-card">
-          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg">${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
+          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg">${leg.match ? `${leg.match}: ` : ""}${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
           <div class="combo-summary">
             <span>Quote <b>${c.combined_odds.toFixed(2)}</b></span>
             <span>Trefferchance ${(c.combined_prob * 100).toFixed(0)}%</span>
@@ -252,7 +252,7 @@
             <span class="combo-history-date">${fmtTime(c.created_at)}</span>
             <span class="combo-status-tag status-${c.status}">${c.status === "won" ? "AUFGEGANGEN" : c.status === "lost" ? "NICHT AUFGEGANGEN" : "OFFEN"}</span>
           </div>
-          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg leg-${leg.status}">${leg.status === "won" ? "✓" : leg.status === "lost" ? "✗" : "…"} ${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
+          <div class="combo-legs">${c.legs.map((leg) => `<span class="combo-leg leg-${leg.status}">${leg.status === "won" ? "✓" : leg.status === "lost" ? "✗" : "…"} ${leg.match ? `${leg.match}: ` : ""}${leg.pick} <b>${leg.odds.toFixed(2)}</b></span>`).join(" + ")}</div>
           <div class="combo-summary">
             <span>Quote <b>${c.combined_odds.toFixed(2)}</b></span>
             <span>Trefferchance ${(c.combined_prob * 100).toFixed(0)}%</span>
