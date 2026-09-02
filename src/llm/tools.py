@@ -163,11 +163,20 @@ def get_best_value_bets(days_ahead: int = 3, min_edge: float = 0.05, limit: int 
                 Prediction.expected_value.is_not(None),
                 Prediction.expected_value >= min_edge,
             )
-            .order_by(Prediction.expected_value.desc())
-            .limit(limit)
+            .order_by(Match.id, Prediction.created_at.desc())
         ).all()
-        results = []
+        # predict.py always inserts a new Prediction row rather than upserting, so a
+        # match re-scored by more than one run (e.g. the daily cron plus a manual
+        # trigger) has several rows here -- keep only the most recent one per match, or
+        # the same match could rank twice in the results and end up combined with
+        # itself in one Kombiwette (get_combo_suggestions() builds off this list).
+        latest_by_match: dict[int, tuple[Prediction, Match]] = {}
         for pred, match in rows:
+            latest_by_match.setdefault(match.id, (pred, match))
+        ranked = sorted(latest_by_match.values(), key=lambda pm: pm[0].expected_value, reverse=True)[:limit]
+
+        results = []
+        for pred, match in ranked:
             pick_map = {"home": match.home_team.name, "draw": "Unentschieden", "away": match.away_team.name}
             prob_map = {"home": pred.home_win_prob, "draw": pred.draw_prob, "away": pred.away_win_prob}
             odds_map = {"home": pred.best_home_odds, "draw": pred.best_draw_odds, "away": pred.best_away_odds}
