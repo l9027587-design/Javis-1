@@ -50,7 +50,13 @@
 
   function fmtTime(iso) {
     try {
-      return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+      return new Date(iso).toLocaleString(undefined, {
+        weekday: "short",
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     } catch { return iso; }
   }
 
