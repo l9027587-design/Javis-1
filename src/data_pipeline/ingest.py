@@ -314,7 +314,17 @@ def settle_combo_bets(session: Session) -> int:
 
 
 def run_ingestion(days_ahead: int = 7) -> dict[str, int]:
-    """Full ingestion cycle across the configured leagues: schedule, results, standings, odds."""
+    """Full ingestion cycle across the configured leagues: schedule, results, standings, odds.
+
+    Split across two sessions on purpose: get_session() rolls back everything written
+    within its `with` block if any exception escapes it, so if odds sync blew up while
+    sharing a session with the football-data.org sync above, a month of successfully
+    fetched matches/results/standings would be silently discarded every single day right
+    along with it -- exactly what happened here before this was split (the daily cron
+    logged "Synced N fixtures" etc. but none of it was ever actually committed, because
+    the run always died later on odds). Odds/combo-settling failing is now isolated to
+    its own session and can't take the football data down with it.
+    """
     init_db()
 
     results = {"matches": 0, "results": 0, "standings": 0, "odds": 0, "combos_settled": 0}
@@ -323,8 +333,16 @@ def run_ingestion(days_ahead: int = 7) -> dict[str, int]:
             results["matches"] += sync_schedule(session, league_code, league_name, days_ahead=days_ahead)
             results["results"] += sync_results(session, league_code, league_name)
             results["standings"] += sync_standings(session, league_code, league_name)
-        results["odds"] += sync_odds(session, OddsAPIClient())
-        results["combos_settled"] += settle_combo_bets(session)
+
+    try:
+        with get_session() as session:
+            results["odds"] += sync_odds(session, OddsAPIClient())
+            results["combos_settled"] += settle_combo_bets(session)
+    except Exception:  # noqa: BLE001 - odds/combo failures shouldn't fail the whole daily
+        # run and skip the train/predict steps that follow it in the GH Actions workflow;
+        # the football data synced above is already safely committed at this point.
+        logger.exception("Odds sync / combo settlement failed, continuing without it")
+
     return results
 
 

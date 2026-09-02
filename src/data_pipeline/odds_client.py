@@ -1,14 +1,23 @@
 """Client for The Odds API (https://the-odds-api.com) — 1X2 (home/draw/away) football odds."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from src.config import settings
 
+logger = logging.getLogger(__name__)
+
 BASE_URL = "https://api.the-odds-api.com/v4"
+
+
+class MarketsUnavailableError(Exception):
+    """Raised when the API rejects the requested markets outright (HTTP 422) -- e.g. the
+    account's plan doesn't include the "totals"/"btts" add-on markets. Not transient, so
+    not worth tenacity's retry -- the caller falls back to h2h-only instead."""
 
 # The Odds API keys football per competition, but unlike tennis these are stable,
 # enduring sport keys (leagues run for most of the year) rather than ephemeral
@@ -28,22 +37,39 @@ class OddsAPIClient:
     def __init__(self) -> None:
         self.session = requests.Session()
 
-    @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_not_exception_type(MarketsUnavailableError),
+    )
     def _get_odds_for_sport(self, sport_key: str, params: dict[str, str]) -> list[dict[str, Any]]:
         url = f"{BASE_URL}/sports/{sport_key}/odds"
         response = self.session.get(url, params={**params, "apiKey": settings.odds_api_key}, timeout=15)
         if response.status_code == 404:
             return []  # this league isn't "in season" right now (e.g. summer break)
+        if response.status_code == 422:
+            raise MarketsUnavailableError(response.text)
         response.raise_for_status()
         return response.json()
 
-    def get_odds(self, regions: str = "eu,uk,us", markets: str = "h2h,totals,btts") -> list[dict[str, Any]]:
-        """Returns bookmaker 1X2/totals/BTTS odds for every configured league."""
-        params = {"regions": regions, "markets": markets, "oddsFormat": "decimal"}
+    def _fetch_all_sports(self, params: dict[str, str]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         for sport_key in SPORT_KEYS:
             events.extend(self._get_odds_for_sport(sport_key, params))
         return events
+
+    def get_odds(self, regions: str = "eu,uk,us", markets: str = "h2h,totals,btts") -> list[dict[str, Any]]:
+        """Returns bookmaker 1X2/totals/BTTS odds for every configured league."""
+        params = {"regions": regions, "markets": markets, "oddsFormat": "decimal"}
+        try:
+            return self._fetch_all_sports(params)
+        except MarketsUnavailableError as exc:
+            if params["markets"] == "h2h":
+                raise
+            logger.warning("Markets '%s' unavailable (%s) -- falling back to h2h only", markets, exc)
+            params["markets"] = "h2h"
+            return self._fetch_all_sports(params)
 
     def get_odds_for_bookmakers(self, bookmakers: str, markets: str = "h2h,totals,btts") -> list[dict[str, Any]]:
         """Same as get_odds(), filtered to specific bookmaker keys (e.g. 'tipico_de').
@@ -53,13 +79,21 @@ class OddsAPIClient:
         which would violate their terms of service and is explicitly the kind of thing
         this project avoids (see ARCHITECTURE.md). Note: The Odds API bills by
         markets-requested count, so asking for all three markets here costs 3x what a
-        h2h-only call did -- worth knowing if odds sync starts erroring on quota.
+        h2h-only call did -- worth knowing if odds sync starts erroring on quota. Also:
+        some plans don't include the "totals"/"btts" add-on markets at all and reject the
+        request outright with a 422 rather than just billing more -- that's handled by
+        automatically retrying with h2h only (see MarketsUnavailableError above), so 1X2
+        odds/EV keep working even when the extra markets aren't available on this plan.
         """
         params = {"bookmakers": bookmakers, "markets": markets, "oddsFormat": "decimal"}
-        events: list[dict[str, Any]] = []
-        for sport_key in SPORT_KEYS:
-            events.extend(self._get_odds_for_sport(sport_key, params))
-        return events
+        try:
+            return self._fetch_all_sports(params)
+        except MarketsUnavailableError as exc:
+            if params["markets"] == "h2h":
+                raise
+            logger.warning("Markets '%s' unavailable (%s) -- falling back to h2h only", markets, exc)
+            params["markets"] = "h2h"
+            return self._fetch_all_sports(params)
 
     @staticmethod
     def best_prices(event: dict[str, Any]) -> dict[str, tuple[str, float]] | None:
