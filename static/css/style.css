@@ -196,6 +196,7 @@ html, body {
 /* ---------- Match detail ---------- */
 .detail-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
 .detail-head .tourney { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
+.detail-head .detail-date { font-size: 11px; color: var(--cyan); letter-spacing: 1px; white-space: nowrap; }
 .detail-players { font-family: var(--font-display); font-size: 18px; margin: 6px 0 18px; color: var(--text); }
 .detail-players .vs { color: var(--amber); margin: 0 8px; font-size: 13px; }
 
