@@ -130,11 +130,18 @@ def save_daily_combo(session, days_ahead: int = 7, max_legs: int = COMBO_MAX_LEG
             Prediction.expected_value >= min_edge,
             Prediction.value_pick.is_not(None),
         )
-        .order_by(Prediction.expected_value.desc())
-        .limit(max_legs)
+        .order_by(Match.id, Prediction.created_at.desc())
     ).all()
-    if len(rows) < 2:
-        logger.info("Only %d value pick(s) available -- not enough for a combo today", len(rows))
+    # A match re-scored by more than one run this session has several Prediction rows
+    # here (predict.py always inserts, never upserts) -- keep only the most recent one
+    # per match, or the same match could be picked twice and end up combined with
+    # itself as two legs of the same combo.
+    latest_by_match: dict[int, tuple[Prediction, Match]] = {}
+    for pred, match in rows:
+        latest_by_match.setdefault(match.id, (pred, match))
+    ranked = sorted(latest_by_match.values(), key=lambda pm: pm[0].expected_value, reverse=True)[:max_legs]
+    if len(ranked) < 2:
+        logger.info("Only %d value pick(s) available -- not enough for a combo today", len(ranked))
         return None
 
     odds_field = {"home": "best_home_odds", "draw": "best_draw_odds", "away": "best_away_odds"}
@@ -145,7 +152,7 @@ def save_daily_combo(session, days_ahead: int = 7, max_legs: int = COMBO_MAX_LEG
     session.flush()  # assign combo.id for the legs' FK
 
     combined_odds, combined_prob = 1.0, 1.0
-    for pred, match in rows:
+    for pred, match in ranked:
         side = pred.value_pick
         odds = getattr(pred, odds_field[side])
         prob = getattr(pred, prob_field[side])
@@ -159,7 +166,7 @@ def save_daily_combo(session, days_ahead: int = 7, max_legs: int = COMBO_MAX_LEG
     combo.combined_ev = round(combined_prob * combined_odds - 1, 3)
     session.flush()
     logger.info(
-        "Saved daily combo: %d legs, odds=%.2f, EV=%.1f%%", len(rows), combo.combined_odds, combo.combined_ev * 100
+        "Saved daily combo: %d legs, odds=%.2f, EV=%.1f%%", len(ranked), combo.combined_odds, combo.combined_ev * 100
     )
     return combo
 
