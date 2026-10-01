@@ -24,6 +24,27 @@ VALUE_BET_EV_THRESHOLD = 0.05  # flag bets with >5% edge over the market-implied
 COMBO_MAX_LEGS = 3
 COMBO_SAVE_FRESHNESS = dt.timedelta(hours=20)  # one saved combo per day, not one per run
 
+# This early in a season there's only a couple hundred finished matches to train on,
+# which XGBoost can still overfit into overconfident probabilities (97% instead of a
+# realistic 60%) even with the regularization/early stopping in train.py -- clipping
+# keeps any single class from going all the way to 0/1 and bounds how badly a leftover
+# miscalibrated reading can distort the EV math below.
+PROB_CLIP_MIN = 0.03
+PROB_CLIP_MAX = 0.94
+# A real edge against an efficient bookmaker line is typically single digits to maybe
+# 20-30% -- an "edge" far beyond that says more about a bad probability estimate than
+# genuine value, especially on a model trained on this little data. Excluding it (not
+# just capping the displayed number) keeps these out of "beste Wetten" and combos,
+# which is where the model's most overconfident -- and least trustworthy -- picks were
+# otherwise guaranteed to end up ranked first.
+MAX_PLAUSIBLE_EV = 0.6
+
+
+def _clip_probs(probs: tuple[float, float, float]) -> tuple[float, float, float]:
+    clipped = [min(max(float(p), PROB_CLIP_MIN), PROB_CLIP_MAX) for p in probs]
+    total = sum(clipped)
+    return tuple(p / total for p in clipped)
+
 
 def load_model() -> tuple[xgb.XGBClassifier, list[str]]:
     if not MODEL_PATH.exists():
@@ -59,7 +80,7 @@ def run_daily_predictions(days_ahead: int = 7) -> int | None:
             features = build_features(session, match.home_team, match.away_team, now)
             X = [[features[col] for col in feature_columns]]
             # Label encoding from features.py: 0=away win, 1=draw, 2=home win.
-            away_prob, draw_prob, home_prob = model.predict_proba(X)[0]
+            away_prob, draw_prob, home_prob = _clip_probs(model.predict_proba(X)[0])
 
             odds = _latest_odds(session, match.id)
             best_home_odds = odds.home_decimal_odds if odds else None
@@ -71,13 +92,21 @@ def run_daily_predictions(days_ahead: int = 7) -> int | None:
             # rather than upcasting) -- psycopg2 can't adapt numpy.float32 to a SQL
             # param, so this needs an explicit cast to a plain Python float before it
             # ever reaches the candidates list that expected_value gets stored from.
+            # Candidates beyond MAX_PLAUSIBLE_EV are dropped entirely rather than
+            # capped, so an implausible reading can never win the max() below.
             candidates: list[tuple[str, float]] = []
             if best_home_odds:
-                candidates.append(("home", float(home_prob * best_home_odds - 1)))
+                ev = float(home_prob * best_home_odds - 1)
+                if ev <= MAX_PLAUSIBLE_EV:
+                    candidates.append(("home", ev))
             if best_draw_odds:
-                candidates.append(("draw", float(draw_prob * best_draw_odds - 1)))
+                ev = float(draw_prob * best_draw_odds - 1)
+                if ev <= MAX_PLAUSIBLE_EV:
+                    candidates.append(("draw", ev))
             if best_away_odds:
-                candidates.append(("away", float(away_prob * best_away_odds - 1)))
+                ev = float(away_prob * best_away_odds - 1)
+                if ev <= MAX_PLAUSIBLE_EV:
+                    candidates.append(("away", ev))
 
             value_pick, ev = (None, None)
             is_value = False
