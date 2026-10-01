@@ -29,6 +29,8 @@
 
   function pct(x) { return `${Math.round(x * 100)}%`; }
 
+  function fmtGoals(x) { return x == null ? "–" : x.toFixed(1); }
+
   // Render's free tier spins the server down after inactivity, and the docs warn the
   // first request after that can take "50 seconds or more" to wake it back up -- the
   // earlier linear backoff (3+6+9s ~= 18s total) gave up well before that. Exponential
@@ -104,9 +106,26 @@
       return;
     }
     if (m.has_prediction === false) {
+      const h = m.home_team, a = m.away_team;
       detailEl.innerHTML = `
         <div class="detail-head"><span class="tourney">${m.league} — ${m.round || "?"}</span><span class="detail-date">${fmtTime(m.start_time)}</span></div>
-        <div class="detail-players">${m.home_team.name}<span class="vs">VS</span>${m.away_team.name}</div>
+        <div class="detail-players">${h.name}<span class="vs">VS</span>${a.name}</div>
+        ${(h.avg_goals_scored != null || a.avg_goals_scored != null) ? `
+        <div class="market-row" style="margin: 14px 0;">
+          <div class="market-label">Ø TORE (LETZTE ${h.played || a.played || ""} SPIELE)</div>
+          <div class="goals-grid">
+            <div class="goals-box">
+              <div class="label">${h.name}</div>
+              <div class="goals-stat"><span>Erzielt</span><b>${fmtGoals(h.avg_goals_scored)}</b></div>
+              <div class="goals-stat"><span>Kassiert</span><b>${fmtGoals(h.avg_goals_conceded)}</b></div>
+            </div>
+            <div class="goals-box">
+              <div class="label">${a.name}</div>
+              <div class="goals-stat"><span>Erzielt</span><b>${fmtGoals(a.avg_goals_scored)}</b></div>
+              <div class="goals-stat"><span>Kassiert</span><b>${fmtGoals(a.avg_goals_conceded)}</b></div>
+            </div>
+          </div>
+        </div>` : ""}
         <div class="placeholder">Noch keine Modell-Prognose für dieses Match — der nächste Trainingslauf holt das nach.</div>
       `;
       return;
@@ -133,6 +152,23 @@
           <div class="prob-pct">${pct(m.away_win_prob)}</div>
         </div>
       </div>
+
+      ${(home.avg_goals_scored != null || away.avg_goals_scored != null) ? `
+      <div class="market-row" style="margin: 18px 0;">
+        <div class="market-label">Ø TORE (LETZTE ${home.played || away.played || ""} SPIELE)</div>
+        <div class="goals-grid">
+          <div class="goals-box">
+            <div class="label">${home.name}</div>
+            <div class="goals-stat"><span>Erzielt</span><b>${fmtGoals(home.avg_goals_scored)}</b></div>
+            <div class="goals-stat"><span>Kassiert</span><b>${fmtGoals(home.avg_goals_conceded)}</b></div>
+          </div>
+          <div class="goals-box">
+            <div class="label">${away.name}</div>
+            <div class="goals-stat"><span>Erzielt</span><b>${fmtGoals(away.avg_goals_scored)}</b></div>
+            <div class="goals-stat"><span>Kassiert</span><b>${fmtGoals(away.avg_goals_conceded)}</b></div>
+          </div>
+        </div>
+      </div>` : ""}
 
       ${m.expected_value == null
         ? `<div class="placeholder">Für dieses Match liegt noch keine Tipico-Quote vor — sobald eine reinkommt, siehst du hier EV und Value-Bet-Check.</div>`
