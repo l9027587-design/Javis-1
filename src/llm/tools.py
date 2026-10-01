@@ -8,10 +8,47 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
 
 from src.db.models import ComboBet, Match, Odds, Prediction
 from src.db.session import get_session
+
+
+def _team_goal_stats(session: Session, team_ids: set[int]) -> dict[int, dict[str, float | int | None]]:
+    """Average goals scored/conceded per team across its synced finished matches (the
+    pipeline keeps roughly the last 45 days of results, see
+    football_client.get_recent_results's days_back) -- used to show a team's recent
+    scoring/defensive form in the match analysis, not a full-season statistic.
+    """
+    if not team_ids:
+        return {}
+    finished = session.scalars(
+        select(Match).where(
+            Match.status == "finished",
+            or_(Match.home_team_id.in_(team_ids), Match.away_team_id.in_(team_ids)),
+        )
+    ).all()
+    scored: dict[int, list[int]] = {tid: [] for tid in team_ids}
+    conceded: dict[int, list[int]] = {tid: [] for tid in team_ids}
+    for m in finished:
+        if m.home_score is None or m.away_score is None:
+            continue
+        if m.home_team_id in scored:
+            scored[m.home_team_id].append(m.home_score)
+            conceded[m.home_team_id].append(m.away_score)
+        if m.away_team_id in scored:
+            scored[m.away_team_id].append(m.away_score)
+            conceded[m.away_team_id].append(m.home_score)
+    stats = {}
+    for tid in team_ids:
+        played = len(scored[tid])
+        stats[tid] = {
+            "avg_goals_scored": round(sum(scored[tid]) / played, 2) if played else None,
+            "avg_goals_conceded": round(sum(conceded[tid]) / played, 2) if played else None,
+            "played": played,
+        }
+    return stats
 
 
 def get_upcoming_matches(days_ahead: int = 7) -> list[dict]:
@@ -46,11 +83,14 @@ def get_match_prediction(match_id: int) -> dict | None:
         pred = session.scalar(
             select(Prediction).where(Prediction.match_id == match_id).order_by(Prediction.created_at.desc()).limit(1)
         )
+        goal_stats = _team_goal_stats(session, {match.home_team_id, match.away_team_id})
         if pred is None:
             return {
                 "match_id": match_id,
                 "home_team": match.home_team.name,
                 "away_team": match.away_team.name,
+                "home_goal_stats": goal_stats.get(match.home_team_id),
+                "away_goal_stats": goal_stats.get(match.away_team_id),
                 "prediction": None,
             }
         return {
@@ -58,6 +98,8 @@ def get_match_prediction(match_id: int) -> dict | None:
             "league": match.league_name,
             "home_team": match.home_team.name,
             "away_team": match.away_team.name,
+            "home_goal_stats": goal_stats.get(match.home_team_id),
+            "away_goal_stats": goal_stats.get(match.away_team_id),
             "home_win_prob": round(pred.home_win_prob, 3),
             "draw_prob": round(pred.draw_prob, 3),
             "away_win_prob": round(pred.away_win_prob, 3),
@@ -106,6 +148,9 @@ def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
         for odds in odds_rows:
             latest_odds_by_match.setdefault(odds.match_id, odds)
 
+        team_ids = {m.home_team_id for m in matches} | {m.away_team_id for m in matches}
+        goal_stats = _team_goal_stats(session, team_ids)
+
         results = []
         for m in matches:
             entry = {
@@ -113,8 +158,16 @@ def get_matches_with_predictions(days_ahead: int = 7) -> list[dict]:
                 "league": m.league_name,
                 "round": m.round,
                 "start_time": m.start_time.isoformat(),
-                "home_team": {"name": m.home_team.name, "position": m.home_team.league_position},
-                "away_team": {"name": m.away_team.name, "position": m.away_team.league_position},
+                "home_team": {
+                    "name": m.home_team.name,
+                    "position": m.home_team.league_position,
+                    **goal_stats.get(m.home_team_id, {}),
+                },
+                "away_team": {
+                    "name": m.away_team.name,
+                    "position": m.away_team.league_position,
+                    **goal_stats.get(m.away_team_id, {}),
+                },
                 "demo": False,
                 "has_prediction": False,
             }

@@ -79,6 +79,16 @@ def _btts_odds(seed: str) -> tuple[float, float]:
     return _tipico_odds(yes_prob), _tipico_odds(1 - yes_prob)
 
 
+def _goal_stats(seed: str) -> dict[str, float | int]:
+    """Deterministic simulated "average goals over recent matches" stats, mirroring the
+    shape tools._team_goal_stats() computes from real finished-match history."""
+    return {
+        "avg_goals_scored": round(0.8 + _seeded_fraction(seed, "scored") * 1.8, 2),
+        "avg_goals_conceded": round(0.6 + _seeded_fraction(seed, "conceded") * 1.6, 2),
+        "played": 8 + int(_seeded_fraction(seed, "played") * 5),
+    }
+
+
 def generate_matches(count: int = 6) -> list[dict]:
     now = dt.datetime.utcnow()
     matches = []
@@ -110,8 +120,8 @@ def generate_matches(count: int = 6) -> list[dict]:
                 "league": league,
                 "round": round_,
                 "start_time": (now + dt.timedelta(hours=3 + i * 7)).isoformat() + "Z",
-                "home_team": {"name": home_name, "position": home_pos},
-                "away_team": {"name": away_name, "position": away_pos},
+                "home_team": {"name": home_name, "position": home_pos, **_goal_stats(f"{seed}-home")},
+                "away_team": {"name": away_name, "position": away_pos, **_goal_stats(f"{seed}-away")},
                 "home_win_prob": round(home_prob, 3),
                 "draw_prob": round(draw_prob, 3),
                 "away_win_prob": round(away_prob, 3),
