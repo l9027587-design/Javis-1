@@ -41,17 +41,31 @@ def train() -> dict[str, float] | None:
     X, y = df[FEATURE_COLUMNS], df["label"]
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
+    # This early in a season there are only a couple hundred finished matches to train
+    # on -- 300 boosting rounds at depth 4 comfortably overfits that, producing
+    # overconfident probabilities (e.g. 97% for an outcome that's really more like
+    # 60%) rather than wrong *predictions* per se: log_loss can come out *worse* than
+    # a flat 33/33/33 guess even while argmax accuracy looks fine, because the
+    # confidently-wrong cases dominate the loss. Those overconfident probabilities are
+    # exactly what predict.py's EV math (prob * odds - 1) turns into the absurd
+    # "+1000% edge" picks that keep getting chosen for combos and keep losing.
+    # min_child_weight/reg_lambda add regularization appropriate for this little data,
+    # and early stopping on the held-out split picks the actual best round instead of
+    # always running the full 300, which is the main lever against overfitting here.
     model = xgb.XGBClassifier(
         objective="multi:softprob",
         num_class=3,
         n_estimators=300,
-        max_depth=4,
+        max_depth=3,
         learning_rate=0.05,
         subsample=0.8,
         colsample_bytree=0.8,
+        min_child_weight=5,
+        reg_lambda=2.0,
         eval_metric="mlogloss",
+        early_stopping_rounds=20,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
 
     proba = model.predict_proba(X_test)
     metrics = {
@@ -59,6 +73,7 @@ def train() -> dict[str, float] | None:
         "accuracy": accuracy_score(y_test, proba.argmax(axis=1)),
         "n_train": len(X_train),
         "n_test": len(X_test),
+        "best_iteration": model.best_iteration,
     }
     logger.info("Training complete: %s", metrics)
 
